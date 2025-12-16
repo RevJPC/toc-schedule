@@ -1,12 +1,26 @@
 import Database from 'better-sqlite3';
 import path from 'path';
+import fs from 'fs';
 
 // Singleton database instance
 let db: Database.Database | null = null;
 
 export function getDb(): Database.Database {
   if (!db) {
-    const dbPath = path.join(process.cwd(), 'data', 'schedule.db');
+    // Use /tmp for Vercel serverless, local data dir for development
+    const isVercel = process.env.VERCEL === '1';
+    let dbPath: string;
+
+    if (isVercel) {
+      dbPath = '/tmp/schedule.db';
+    } else {
+      const dataDir = path.join(process.cwd(), 'data');
+      if (!fs.existsSync(dataDir)) {
+        fs.mkdirSync(dataDir, { recursive: true });
+      }
+      dbPath = path.join(dataDir, 'schedule.db');
+    }
+
     db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
     initializeDb(db);
