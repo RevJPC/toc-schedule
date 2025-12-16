@@ -79,6 +79,7 @@ export default function AdminDashboard() {
     const [selectedTemplateMarket, setSelectedTemplateMarket] = useState<string>('');
     const [showAddTemplate, setShowAddTemplate] = useState(false);
     const [newTemplate, setNewTemplate] = useState({ startTime: '10:00', endTime: '14:00', capacity: 2 });
+    const [editingTemplate, setEditingTemplate] = useState<{ id: number; startTime: string; endTime: string } | null>(null);
 
     // Day-of-week capacity editor state
     const [showCapacityEditor, setShowCapacityEditor] = useState(false);
@@ -766,9 +767,70 @@ export default function AdminDashboard() {
                                         gap: '1rem'
                                     }}
                                 >
-                                    <p style={{ fontWeight: '500' }}>
-                                        {formatTime(template.startTime)} - {formatTime(template.endTime)}
-                                    </p>
+                                    {editingTemplate?.id === template.id ? (
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                            <input
+                                                type="time"
+                                                value={editingTemplate.startTime}
+                                                onChange={(e) => setEditingTemplate({ ...editingTemplate, startTime: e.target.value })}
+                                                style={{ minHeight: '38px' }}
+                                            />
+                                            <span>-</span>
+                                            <input
+                                                type="time"
+                                                value={editingTemplate.endTime}
+                                                onChange={(e) => setEditingTemplate({ ...editingTemplate, endTime: e.target.value })}
+                                                style={{ minHeight: '38px' }}
+                                            />
+                                            <button
+                                                className="btn btn-primary"
+                                                onClick={async () => {
+                                                    try {
+                                                        const res = await fetch(`/api/templates/${template.id}`, {
+                                                            method: 'PATCH',
+                                                            headers: { 'Content-Type': 'application/json' },
+                                                            body: JSON.stringify({
+                                                                startTime: editingTemplate.startTime,
+                                                                endTime: editingTemplate.endTime
+                                                            })
+                                                        });
+                                                        const data = await res.json();
+                                                        if (!res.ok) {
+                                                            showNotification(data.error || 'Failed to update', 'error');
+                                                            return;
+                                                        }
+                                                        setTemplates(templates.map(t =>
+                                                            t.id === template.id
+                                                                ? { ...t, startTime: editingTemplate.startTime, endTime: editingTemplate.endTime }
+                                                                : t
+                                                        ).sort((a, b) => a.startTime.localeCompare(b.startTime)));
+                                                        setEditingTemplate(null);
+                                                        showNotification('Template updated', 'success');
+                                                    } catch (e) {
+                                                        showNotification('Failed to update', 'error');
+                                                    }
+                                                }}
+                                                style={{ padding: '0.5rem' }}
+                                            >
+                                                Save
+                                            </button>
+                                            <button
+                                                className="btn btn-secondary"
+                                                onClick={() => setEditingTemplate(null)}
+                                                style={{ padding: '0.5rem' }}
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <p
+                                            style={{ fontWeight: '500', cursor: 'pointer' }}
+                                            onClick={() => setEditingTemplate({ id: template.id, startTime: template.startTime, endTime: template.endTime })}
+                                            title="Click to edit time"
+                                        >
+                                            {formatTime(template.startTime)} - {formatTime(template.endTime)}
+                                        </p>
+                                    )}
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                                             <label style={{ margin: 0, fontSize: '0.875rem' }}>Default:</label>
