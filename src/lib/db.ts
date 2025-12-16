@@ -151,7 +151,57 @@ function seedDefaultData(db: Database.Database) {
 
   templates.forEach(t => insertTemplate.run(t.market, t.start, t.end, t.capacity));
 
-  console.log('Database seeded with default data');
+  // Insert sample scheduled shifts for demo
+  const insertScheduledShift = db.prepare(`
+    INSERT INTO scheduled_shifts (driver_id, template_id, date)
+    VALUES (?, ?, ?)
+  `);
+
+  // Generate dates for today and the next 6 days
+  const today = new Date();
+  const getDateString = (daysFromNow: number) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() + daysFromNow);
+    return d.toISOString().split('T')[0];
+  };
+
+  // Sample scheduled shifts - drivers scheduled for various days
+  const sampleShifts = [
+    // Today - Chapel Hill
+    { driverId: 1, templateId: 2, date: getDateString(0) },  // John - 10:00-14:00
+    { driverId: 2, templateId: 4, date: getDateString(0) },  // Jane - 14:00-21:00
+    // Today - Raleigh
+    { driverId: 3, templateId: 6, date: getDateString(0) },  // Bob - 10:00-14:00
+    // Tomorrow
+    { driverId: 1, templateId: 3, date: getDateString(1) },  // John - 11:00-16:00
+    { driverId: 2, templateId: 2, date: getDateString(1) },  // Jane - 10:00-14:00
+    { driverId: 3, templateId: 8, date: getDateString(1) },  // Bob - 16:00-21:00
+    { driverId: 4, templateId: 9, date: getDateString(1) },  // Alice - Asheville
+    // Day after tomorrow
+    { driverId: 1, templateId: 5, date: getDateString(2) },  // John - 16:00-21:00
+    { driverId: 2, templateId: 1, date: getDateString(2) },  // Jane - 08:00-10:00
+    { driverId: 2, templateId: 4, date: getDateString(2) },  // Jane - 14:00-21:00
+    { driverId: 5, templateId: 11, date: getDateString(2) }, // Charlie - Durham
+    // 3 days out
+    { driverId: 3, templateId: 7, date: getDateString(3) },  // Bob - 11:00-16:00
+    { driverId: 1, templateId: 2, date: getDateString(3) },  // John - 10:00-14:00
+    // 4 days out
+    { driverId: 4, templateId: 10, date: getDateString(4) }, // Alice - Asheville 14:00-21:00
+    { driverId: 2, templateId: 3, date: getDateString(4) },  // Jane - 11:00-16:00
+    // 5 days out
+    { driverId: 1, templateId: 4, date: getDateString(5) },  // John - 14:00-21:00
+    { driverId: 5, templateId: 12, date: getDateString(5) }, // Charlie - Durham 16:00-21:00
+  ];
+
+  sampleShifts.forEach(s => {
+    try {
+      insertScheduledShift.run(s.driverId, s.templateId, s.date);
+    } catch (e) {
+      // Ignore duplicate key errors
+    }
+  });
+
+  console.log('Database seeded with default data and sample shifts');
 }
 
 // Helper functions for common queries
