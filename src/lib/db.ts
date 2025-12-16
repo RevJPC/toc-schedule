@@ -113,7 +113,7 @@ function initializeDb(db: Database.Database) {
 function seedDefaultData(db: Database.Database) {
   // Insert default markets
   const insertMarket = db.prepare('INSERT INTO markets (name) VALUES (?)');
-  const markets = ['Chapel Hill', 'Raleigh', 'Asheville', 'Durham'];
+  const markets = ['Chapel Hill', 'Asheville'];
   markets.forEach(m => insertMarket.run(m));
 
   // Insert default admin settings
@@ -131,9 +131,8 @@ function seedDefaultData(db: Database.Database) {
   const sampleDrivers = [
     { name: 'John Driver', email: 'john@example.com', phone: '919-555-0101', market: 'Chapel Hill', priority: 3 },
     { name: 'Jane Smith', email: 'jane@example.com', phone: '919-555-0102', market: 'Chapel Hill', priority: 1 },
-    { name: 'Bob Johnson', email: 'bob@example.com', phone: '919-555-0103', market: 'Raleigh', priority: 2 },
-    { name: 'Alice Williams', email: 'alice@example.com', phone: '919-555-0104', market: 'Asheville', priority: 5 },
-    { name: 'Charlie Brown', email: 'charlie@example.com', phone: '919-555-0105', market: 'Durham', priority: 4 },
+    { name: 'Alice Williams', email: 'alice@example.com', phone: '828-555-0104', market: 'Asheville', priority: 2 },
+    { name: 'Mike Turner', email: 'mike@example.com', phone: '828-555-0105', market: 'Asheville', priority: 3 },
   ];
 
   sampleDrivers.forEach(d => insertDriver.run(d.name, d.email, d.phone, d.market, d.priority));
@@ -151,16 +150,11 @@ function seedDefaultData(db: Database.Database) {
     { market: 'Chapel Hill', start: '11:00', end: '16:00', capacity: 2 },
     { market: 'Chapel Hill', start: '14:00', end: '21:00', capacity: 4 },
     { market: 'Chapel Hill', start: '16:00', end: '21:00', capacity: 3 },
-    // Raleigh
-    { market: 'Raleigh', start: '10:00', end: '14:00', capacity: 4 },
-    { market: 'Raleigh', start: '11:00', end: '16:00', capacity: 3 },
-    { market: 'Raleigh', start: '16:00', end: '21:00', capacity: 5 },
     // Asheville
     { market: 'Asheville', start: '10:00', end: '14:00', capacity: 2 },
+    { market: 'Asheville', start: '11:00', end: '16:00', capacity: 2 },
     { market: 'Asheville', start: '14:00', end: '21:00', capacity: 3 },
-    // Durham
-    { market: 'Durham', start: '11:00', end: '16:00', capacity: 3 },
-    { market: 'Durham', start: '16:00', end: '21:00', capacity: 4 },
+    { market: 'Asheville', start: '16:00', end: '21:00', capacity: 2 },
   ];
 
   templates.forEach(t => insertTemplate.run(t.market, t.start, t.end, t.capacity));
@@ -180,31 +174,32 @@ function seedDefaultData(db: Database.Database) {
   };
 
   // Sample scheduled shifts - drivers scheduled for various days
+  // Template IDs: CH: 1-5, AVL: 6-9
   const sampleShifts = [
     // Today - Chapel Hill
     { driverId: 1, templateId: 2, date: getDateString(0) },  // John - 10:00-14:00
     { driverId: 2, templateId: 4, date: getDateString(0) },  // Jane - 14:00-21:00
-    // Today - Raleigh
-    { driverId: 3, templateId: 6, date: getDateString(0) },  // Bob - 10:00-14:00
+    // Today - Asheville
+    { driverId: 3, templateId: 6, date: getDateString(0) },  // Alice - 10:00-14:00
     // Tomorrow
     { driverId: 1, templateId: 3, date: getDateString(1) },  // John - 11:00-16:00
     { driverId: 2, templateId: 2, date: getDateString(1) },  // Jane - 10:00-14:00
-    { driverId: 3, templateId: 8, date: getDateString(1) },  // Bob - 16:00-21:00
-    { driverId: 4, templateId: 9, date: getDateString(1) },  // Alice - Asheville
+    { driverId: 3, templateId: 8, date: getDateString(1) },  // Alice - 14:00-21:00
+    { driverId: 4, templateId: 7, date: getDateString(1) },  // Mike - 11:00-16:00
     // Day after tomorrow
     { driverId: 1, templateId: 5, date: getDateString(2) },  // John - 16:00-21:00
     { driverId: 2, templateId: 1, date: getDateString(2) },  // Jane - 08:00-10:00
     { driverId: 2, templateId: 4, date: getDateString(2) },  // Jane - 14:00-21:00
-    { driverId: 5, templateId: 11, date: getDateString(2) }, // Charlie - Durham
+    { driverId: 4, templateId: 9, date: getDateString(2) },  // Mike - 16:00-21:00
     // 3 days out
-    { driverId: 3, templateId: 7, date: getDateString(3) },  // Bob - 11:00-16:00
+    { driverId: 3, templateId: 6, date: getDateString(3) },  // Alice - 10:00-14:00
     { driverId: 1, templateId: 2, date: getDateString(3) },  // John - 10:00-14:00
     // 4 days out
-    { driverId: 4, templateId: 10, date: getDateString(4) }, // Alice - Asheville 14:00-21:00
+    { driverId: 3, templateId: 8, date: getDateString(4) },  // Alice - 14:00-21:00
     { driverId: 2, templateId: 3, date: getDateString(4) },  // Jane - 11:00-16:00
     // 5 days out
     { driverId: 1, templateId: 4, date: getDateString(5) },  // John - 14:00-21:00
-    { driverId: 5, templateId: 12, date: getDateString(5) }, // Charlie - Durham 16:00-21:00
+    { driverId: 4, templateId: 8, date: getDateString(5) },  // Mike - 14:00-21:00
   ];
 
   sampleShifts.forEach(s => {
