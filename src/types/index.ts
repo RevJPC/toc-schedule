@@ -14,7 +14,8 @@ export interface Driver {
 export interface Market {
     id: number;
     name: string;
-    active: boolean;
+    market: string; // 3-letter code
+    active: number;
 }
 
 export interface ShiftTemplate {
@@ -44,6 +45,46 @@ export interface AdminSettings {
     cancelHoursBefore: number;
     showAvailableSpots: boolean;
     slackWebhookUrl?: string;
+}
+
+// Settings interface for client-side usage
+export interface Settings {
+    baseScheduleDays: number;
+    cancelHoursBefore: number;
+    showAvailableSpots: boolean;
+    slackWebhookUrl?: string;
+}
+
+// Shift interface with availability info
+export interface Shift {
+    id: number;
+    market: string;
+    startTime: string;
+    endTime: string;
+    capacity: number;
+    scheduled: number;
+    available: number;
+    drivers: Array<{ id: number; name: string; shiftId: number }>;
+}
+
+// Template interface for admin
+export interface Template {
+    id: number;
+    market: string;
+    startTime: string;
+    endTime: string;
+    capacity: number;
+}
+
+// Shift with drivers for admin schedule view
+export interface ShiftWithDrivers {
+    id: number;
+    startTime: string;
+    endTime: string;
+    capacity: number;
+    scheduled: number;
+    available: number;
+    drivers: { shiftId: number; name: string }[];
 }
 
 // API Response types

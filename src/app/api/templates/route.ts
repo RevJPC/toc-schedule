@@ -85,3 +85,52 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
 }
+// DELETE /api/templates - Delete a shift template
+export async function DELETE(request: NextRequest) {
+    try {
+        const { searchParams } = new URL(request.url);
+        const id = searchParams.get('id');
+
+        if (!id) {
+            return NextResponse.json({ error: 'ID is required' }, { status: 400 });
+        }
+
+        const db = getDb();
+        const templateId = parseInt(id);
+
+        // Check for dependencies (scheduled shifts)
+        // We could CASCADE, but safer to block if shifts exist, or just delete future shifts?
+        // Let's block if there are future shifts to be safe.
+        const activeShifts = db.prepare("SELECT COUNT(*) as count FROM scheduled_shifts WHERE template_id = ? AND date >= date('now')").get(templateId) as { count: number };
+
+        if (activeShifts.count > 0) {
+            return NextResponse.json({ error: 'Cannot delete template with active future shifts.' }, { status: 409 });
+        }
+
+        // It's effectively safe to delete historical shifts mapping if we want, or we can leave them orphaned (but then history breaks).
+        // Actually, if we delete the template, `scheduled_shifts` foreign key `template_id` might restrict us or cascade.
+        // Let's check schema. Assuming we can delete if no active shifts.
+
+        // Delete associated overrides first (if any)
+        db.prepare('DELETE FROM capacity_overrides WHERE template_id = ?').run(templateId);
+
+        // Delete the template
+        const result = db.prepare('DELETE FROM shift_templates WHERE id = ?').run(templateId);
+
+        if (result.changes === 0) {
+            return NextResponse.json({ error: 'Template not found' }, { status: 404 });
+        }
+
+        return NextResponse.json({ success: true, message: 'Template deleted' });
+    } catch (error) {
+        const fs = require('fs');
+        const logPath = process.cwd() + '/template_debug.log';
+        fs.appendFileSync(logPath, `[ERROR] ${JSON.stringify(error, Object.getOwnPropertyNames(error))}\n`);
+
+        if ((error as { code?: string }).code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+            return NextResponse.json({ error: 'Cannot delete: Template is in use by past shifts.' }, { status: 409 });
+        }
+        console.error('Error deleting template:', error);
+        return NextResponse.json({ error: 'Internal server error: ' + (error as Error).message }, { status: 500 });
+    }
+}

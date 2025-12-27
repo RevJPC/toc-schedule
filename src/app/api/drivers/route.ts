@@ -16,36 +16,57 @@ export async function GET() {
 export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
-        const { name, email, phone, market, priority } = body;
+        // Allow flexible input: 'name' (full string) or 'firstName'/'lastName'
+        let { name, firstName, lastName, email, phone, market, priority } = body;
 
-        if (!name || !email || !market) {
+        if ((!name && (!firstName || !lastName)) || !email || !market) {
             return NextResponse.json(
                 { error: 'Name, email, and market are required' },
                 { status: 400 }
             );
         }
 
+        // normalize name
+        if (!firstName) {
+            const parts = name.trim().split(' ');
+            firstName = parts[0];
+            lastName = parts.slice(1).join(' ') || '';
+        }
+
+        let displayName = name;
+        if (!displayName) {
+            displayName = `${firstName} ${lastName}`.trim();
+        }
+
+        // normalize phone (remove dashes)
+        const cleanPhone = phone ? phone.replace(/-/g, '') : null;
+
+        // normalize market (should be 3 chars ideally, but if name passed, we might need logic. 
+        // For now assume frontend sends code or we truncate, but db migration handled strict codes.)
+        // Ideally frontend is updated to send code. 
+
         const db = getDb();
 
         try {
             const result = db.prepare(`
-        INSERT INTO drivers (name, email, phone, market, priority, blocked)
-        VALUES (?, ?, ?, ?, ?, 0)
-      `).run(name, email, phone || null, market, priority || 5);
+        INSERT INTO Drivers (Owner_fname, Owner_lname, displayName, email, phone, market, schedule_priority, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+      `).run(firstName, lastName, displayName, email, cleanPhone, market, priority || 5);
 
             return NextResponse.json({
                 success: true,
                 driver: {
                     id: result.lastInsertRowid,
-                    name,
+                    name: displayName,
                     email,
-                    phone,
+                    phone: cleanPhone,
                     market,
                     priority: priority || 5,
-                    blocked: false
+                    blocked: false // Legacy compat
                 }
             });
         } catch (error) {
+            // ... existing error handling ...
             if ((error as { code?: string }).code === 'SQLITE_CONSTRAINT_UNIQUE') {
                 return NextResponse.json({ error: 'Email already exists' }, { status: 400 });
             }

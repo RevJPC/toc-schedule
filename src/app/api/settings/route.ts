@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAdminSettings, updateAdminSettings } from '@/lib/db';
+import { getScheduleSettings, updateScheduleSettings } from '@/lib/db';
 
-// GET /api/settings - Get admin settings
+// GET /api/settings - Get settings
 export async function GET() {
     try {
-        const settings = getAdminSettings() as {
+        const settings = getScheduleSettings() as {
             id: number;
             base_schedule_days: number;
             cancel_hours_before: number;
@@ -27,7 +27,7 @@ export async function GET() {
     }
 }
 
-// PATCH /api/settings - Update admin settings
+// PATCH /api/settings - Update settings
 export async function PATCH(request: NextRequest) {
     try {
         const body = await request.json();
@@ -42,14 +42,14 @@ export async function PATCH(request: NextRequest) {
             return NextResponse.json({ error: 'cancelHoursBefore must be 1-72' }, { status: 400 });
         }
 
-        updateAdminSettings({
+        updateScheduleSettings({
             baseScheduleDays,
             cancelHoursBefore,
             showAvailableSpots,
             slackWebhookUrl
         });
 
-        const settings = getAdminSettings() as {
+        const settings = getScheduleSettings() as {
             base_schedule_days: number;
             cancel_hours_before: number;
             show_available_spots: number;

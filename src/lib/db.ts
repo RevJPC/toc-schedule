@@ -21,6 +21,7 @@ export function getDb(): Database.Database {
       dbPath = path.join(dataDir, 'schedule.db');
     }
 
+    console.log('[DB] Initializing database at:', dbPath);
     db = new Database(dbPath);
     db.pragma('journal_mode = WAL');
     initializeDb(db);
@@ -29,36 +30,60 @@ export function getDb(): Database.Database {
 }
 
 function initializeDb(db: Database.Database) {
-  // Create tables if they don't exist
+  // Check for old tables to determine if migration is needed
+  // We rename them immediately to avoid conflicts with new schema (especially case-insensitive names like drivers/Drivers)
+  const oldMarketsExist = db.prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name='markets'").get() as { count: number };
+  const oldDriversExist = db.prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name='drivers'").get() as { count: number };
+
+  const migrationNeeded = oldMarketsExist.count > 0 || oldDriversExist.count > 0;
+
+  // MIGRATION DISABLED - If you need to migrate old data, uncomment this block
+  /*
+  if (migrationNeeded) {
+    console.log("Migration needed. Preparing tables...");
+    db.pragma('foreign_keys = OFF');
+    if (oldMarketsExist.count > 0) {
+      try { db.exec("ALTER TABLE markets RENAME TO markets_temp"); } catch (e) { console.log('markets already renamed?'); }
+    }
+    if (oldDriversExist.count > 0) {
+      try { db.exec("ALTER TABLE drivers RENAME TO drivers_temp"); } catch (e) { console.log('drivers already renamed?'); }
+    }
+  }
+  */
+
+  // Create tables (New Schema)
   db.exec(`
-    -- Markets table
-    CREATE TABLE IF NOT EXISTS markets (
+    -- Markets table (renamed to 'count')
+    CREATE TABLE IF NOT EXISTS count (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL UNIQUE,
-      active INTEGER DEFAULT 1
+      market TEXT NOT NULL UNIQUE, -- 3 letter code (avl, tto, etc)
+      defaultcity TEXT NOT NULL, -- Readable name (Asheville, etc)
+      status INTEGER DEFAULT 1 -- 1=active, 0=inactive
     );
 
-    -- Drivers table
-    CREATE TABLE IF NOT EXISTS drivers (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
+    -- Drivers table (renamed to 'Drivers')
+    CREATE TABLE IF NOT EXISTS Drivers (
+      did INTEGER PRIMARY KEY AUTOINCREMENT, -- was id
+      Owner_fname TEXT NOT NULL,
+      Owner_lname TEXT NOT NULL,
+      displayName TEXT, -- Preferred name
       email TEXT NOT NULL UNIQUE,
-      phone TEXT,
-      market TEXT NOT NULL,
-      priority INTEGER DEFAULT 5 CHECK(priority >= 1 AND priority <= 5),
-      blocked INTEGER DEFAULT 0,
+      phone TEXT, -- No dashes
+      market TEXT NOT NULL, -- 3 letter code
+      schedule_priority INTEGER DEFAULT 5 CHECK(schedule_priority >= 1 AND schedule_priority <= 5), -- was priority
+      status INTEGER DEFAULT 1, -- 1=active, 0=inactive (inverse of blocked)
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (market) REFERENCES markets(name)
+      FOREIGN KEY (market) REFERENCES count(market)
     );
 
     -- Shift templates table
     CREATE TABLE IF NOT EXISTS shift_templates (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      market TEXT NOT NULL,
+      market TEXT NOT NULL, -- 3 letter code
       start_time TEXT NOT NULL,
       end_time TEXT NOT NULL,
       capacity INTEGER DEFAULT 1 CHECK(capacity >= 1 AND capacity <= 20),
-      FOREIGN KEY (market) REFERENCES markets(name),
+      FOREIGN KEY (market) REFERENCES count(market),
       UNIQUE(market, start_time, end_time)
     );
 
@@ -69,13 +94,13 @@ function initializeDb(db: Database.Database) {
       template_id INTEGER NOT NULL,
       date TEXT NOT NULL,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (driver_id) REFERENCES drivers(id),
+      FOREIGN KEY (driver_id) REFERENCES Drivers(did),
       FOREIGN KEY (template_id) REFERENCES shift_templates(id),
       UNIQUE(driver_id, template_id, date)
     );
 
-    -- Admin settings table (single row)
-    CREATE TABLE IF NOT EXISTS admin_settings (
+    -- Schedule settings table
+    CREATE TABLE IF NOT EXISTS schedule_settings (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       base_schedule_days INTEGER DEFAULT 7,
       cancel_hours_before INTEGER DEFAULT 24,
@@ -92,7 +117,7 @@ function initializeDb(db: Database.Database) {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
-    -- Capacity overrides by day of week (0=Sunday, 1=Monday, ..., 6=Saturday)
+    -- Capacity overrides
     CREATE TABLE IF NOT EXISTS capacity_overrides (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       template_id INTEGER NOT NULL,
@@ -103,131 +128,199 @@ function initializeDb(db: Database.Database) {
     );
   `);
 
-  // Seed default data if tables are empty
-  const marketCount = db.prepare('SELECT COUNT(*) as count FROM markets').get() as { count: number };
-  if (marketCount.count === 0) {
-    seedDefaultData(db);
+  // MIGRATION EXECUTION DISABLED
+  /*
+  if (migrationNeeded) {
+    console.log("Executing Data Migration...");
+    db.transaction(() => {
+      const marketMap: Record<string, string> = {
+        'Asheville': 'avl', 'Chapel Hill': 'tto', 'Raleigh': 'rto',
+        'Durham': 'dto', 'Wilmington': 'ilm', 'Greensboro': 'gso', 'Winston-Salem': 'int'
+      };
+  
+      // 1. Markets -> count
+      if (oldMarketsExist.count > 0) {
+        console.log("Migrating 'markets_temp' -> 'count'...");
+        const oldMarkets = db.prepare("SELECT * FROM markets_temp").all() as any[];
+  
+        const insertCount = db.prepare("INSERT OR IGNORE INTO count (market, defaultcity, status) VALUES (?, ?, ?)");
+        for (const m of oldMarkets) {
+          const code = marketMap[m.name] || m.name.substring(0, 3).toLowerCase();
+          insertCount.run(code, m.name, m.active);
+        }
+  
+        // Update shift_templates DATA (referencing codes now)
+        // Note: shift_templates schema is newly created if it didn't exist, but here we assume it existed and we want to preserve data?
+        // Wait, shift_templates wasn't renamed. So it matches check "CREATE TABLE IF NOT EXISTS".
+        // If shift_templates existed, it uses old schema (market text). New schema uses market text too.
+        // But FK matches? 
+        // We should update DATA in place, then recreate schema to enforce FK.
+  
+        const templates = db.prepare("SELECT * FROM shift_templates").all() as any[];
+        const updateTemplateMarket = db.prepare("UPDATE shift_templates SET market = ? WHERE id = ?");
+        for (const t of templates) {
+          const newMarket = marketMap[t.market] || t.market.substring(0, 3).toLowerCase();
+          updateTemplateMarket.run(newMarket, t.id);
+        }
+  
+        db.exec("DROP TABLE markets_temp");
+  
+        console.log("Recreating shift_templates schema...");
+        // Check if shift_templates exists and needs migration
+        const shiftTemplatesExists = db.prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name='shift_templates'").get() as { count: number };
+  
+        if (shiftTemplatesExists.count > 0) {
+          db.exec("ALTER TABLE shift_templates RENAME TO shift_templates_old");
+          // New schema was already defined in the big Exec block? No, IF NOT EXISTS skipped it if it existed.
+          // So we need to CREATE it now.
+          db.exec(`
+                  CREATE TABLE shift_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    market TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    capacity INTEGER DEFAULT 1 CHECK(capacity >= 1 AND capacity <= 20),
+                    FOREIGN KEY (market) REFERENCES count(market),
+                    UNIQUE(market, start_time, end_time)
+                  );
+                `);
+          // Check if shift_templates_old actually exists before trying to copy from it
+          const oldTableExists = db.prepare("SELECT count(*) as count FROM sqlite_master WHERE type='table' AND name='shift_templates_old'").get() as { count: number };
+          if (oldTableExists.count > 0) {
+            db.exec("INSERT INTO shift_templates SELECT * FROM shift_templates_old");
+            db.exec("DROP TABLE shift_templates_old");
+          }
+        }
+      }
+  
+      // 2. Drivers -> Drivers
+      if (oldDriversExist.count > 0) {
+        console.log("Migrating 'drivers_temp' -> 'Drivers'...");
+        const oldDrivers = db.prepare("SELECT * FROM drivers_temp").all() as any[];
+        const insertDriver = db.prepare(`
+                  INSERT INTO Drivers (did, Owner_fname, Owner_lname, displayName, email, phone, market, schedule_priority, status)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              `);
+  
+        for (const d of oldDrivers) {
+          const parts = d.name.trim().split(' ');
+          const fname = parts[0];
+          const lname = parts.slice(1).join(' ') || '';
+          const phone = d.phone ? d.phone.replace(/-/g, '') : '';
+          const marketCode = marketMap[d.market] || d.market.substring(0, 3).toLowerCase();
+          const status = d.blocked ? 0 : 1;
+          insertDriver.run(d.id, fname, lname, d.name, d.email, phone, marketCode, d.priority, status);
+        }
+  
+        db.exec("DROP TABLE drivers_temp");
+  
+        console.log("Recreating scheduled_shifts schema...");
+        db.exec("ALTER TABLE scheduled_shifts RENAME TO scheduled_shifts_old");
+        db.exec(`
+                CREATE TABLE scheduled_shifts (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  driver_id INTEGER NOT NULL,
+                  template_id INTEGER NOT NULL,
+                  date TEXT NOT NULL,
+                  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                  FOREIGN KEY (driver_id) REFERENCES Drivers(did),
+                  FOREIGN KEY (template_id) REFERENCES shift_templates(id),
+                  UNIQUE(driver_id, template_id, date)
+                );
+              `);
+        db.exec("INSERT INTO scheduled_shifts SELECT * FROM scheduled_shifts_old");
+        db.exec("DROP TABLE scheduled_shifts_old");
+      }
+    })();
+  
+    db.pragma('foreign_keys = ON');
+    console.log("Migration complete.");
+  }
+  */
+
+  // Ensure default settings exist
+  const settingsCount = db.prepare('SELECT COUNT(*) as count FROM schedule_settings').get() as { count: number };
+  if (settingsCount.count === 0) {
+    db.prepare(`
+    INSERT INTO schedule_settings (id, base_schedule_days, cancel_hours_before, show_available_spots)
+    VALUES (1, 7, 24, 0)
+  `).run();
   }
 }
 
 function seedDefaultData(db: Database.Database) {
-  // Insert default markets
-  const insertMarket = db.prepare('INSERT INTO markets (name) VALUES (?)');
-  const markets = ['Chapel Hill', 'Asheville'];
-  markets.forEach(m => insertMarket.run(m));
+  // Insert default markets (using new schema)
+  const insertMarket = db.prepare('INSERT OR IGNORE INTO count (market, defaultcity, status) VALUES (?, ?, 1)');
+  insertMarket.run('tto', 'Chapel Hill');
+  insertMarket.run('avl', 'Asheville');
 
-  // Insert default admin settings
-  db.prepare(`
-    INSERT OR IGNORE INTO admin_settings (id, base_schedule_days, cancel_hours_before, show_available_spots)
-    VALUES (1, 7, 24, 0)
-  `).run();
-
-  // Insert sample drivers
-  const insertDriver = db.prepare(`
-    INSERT INTO drivers (name, email, phone, market, priority, blocked)
-    VALUES (?, ?, ?, ?, ?, 0)
-  `);
-
-  const sampleDrivers = [
-    { name: 'John Driver', email: 'john@example.com', phone: '919-555-0101', market: 'Chapel Hill', priority: 3 },
-    { name: 'Jane Smith', email: 'jane@example.com', phone: '919-555-0102', market: 'Chapel Hill', priority: 1 },
-    { name: 'Alice Williams', email: 'alice@example.com', phone: '828-555-0104', market: 'Asheville', priority: 2 },
-    { name: 'Mike Turner', email: 'mike@example.com', phone: '828-555-0105', market: 'Asheville', priority: 3 },
-  ];
-
-  sampleDrivers.forEach(d => insertDriver.run(d.name, d.email, d.phone, d.market, d.priority));
-
-  // Insert sample shift templates
-  const insertTemplate = db.prepare(`
-    INSERT INTO shift_templates (market, start_time, end_time, capacity)
-    VALUES (?, ?, ?, ?)
-  `);
-
-  const templates = [
-    // Chapel Hill
-    { market: 'Chapel Hill', start: '08:00', end: '10:00', capacity: 2 },
-    { market: 'Chapel Hill', start: '10:00', end: '14:00', capacity: 3 },
-    { market: 'Chapel Hill', start: '11:00', end: '16:00', capacity: 2 },
-    { market: 'Chapel Hill', start: '14:00', end: '21:00', capacity: 4 },
-    { market: 'Chapel Hill', start: '16:00', end: '21:00', capacity: 3 },
-    // Asheville
-    { market: 'Asheville', start: '10:00', end: '14:00', capacity: 2 },
-    { market: 'Asheville', start: '11:00', end: '16:00', capacity: 2 },
-    { market: 'Asheville', start: '14:00', end: '21:00', capacity: 3 },
-    { market: 'Asheville', start: '16:00', end: '21:00', capacity: 2 },
-  ];
-
-  templates.forEach(t => insertTemplate.run(t.market, t.start, t.end, t.capacity));
-
-  // Insert sample scheduled shifts for demo
-  const insertScheduledShift = db.prepare(`
-    INSERT INTO scheduled_shifts (driver_id, template_id, date)
-    VALUES (?, ?, ?)
-  `);
-
-  // Generate dates for today and the next 6 days
-  const today = new Date();
-  const getDateString = (daysFromNow: number) => {
-    const d = new Date(today);
-    d.setDate(d.getDate() + daysFromNow);
-    return d.toISOString().split('T')[0];
-  };
-
-  // Sample scheduled shifts - drivers scheduled for various days
-  // Template IDs: CH: 1-5, AVL: 6-9
-  const sampleShifts = [
-    // Today - Chapel Hill
-    { driverId: 1, templateId: 2, date: getDateString(0) },  // John - 10:00-14:00
-    { driverId: 2, templateId: 4, date: getDateString(0) },  // Jane - 14:00-21:00
-    // Today - Asheville
-    { driverId: 3, templateId: 6, date: getDateString(0) },  // Alice - 10:00-14:00
-    // Tomorrow
-    { driverId: 1, templateId: 3, date: getDateString(1) },  // John - 11:00-16:00
-    { driverId: 2, templateId: 2, date: getDateString(1) },  // Jane - 10:00-14:00
-    { driverId: 3, templateId: 8, date: getDateString(1) },  // Alice - 14:00-21:00
-    { driverId: 4, templateId: 7, date: getDateString(1) },  // Mike - 11:00-16:00
-    // Day after tomorrow
-    { driverId: 1, templateId: 5, date: getDateString(2) },  // John - 16:00-21:00
-    { driverId: 2, templateId: 1, date: getDateString(2) },  // Jane - 08:00-10:00
-    { driverId: 2, templateId: 4, date: getDateString(2) },  // Jane - 14:00-21:00
-    { driverId: 4, templateId: 9, date: getDateString(2) },  // Mike - 16:00-21:00
-    // 3 days out
-    { driverId: 3, templateId: 6, date: getDateString(3) },  // Alice - 10:00-14:00
-    { driverId: 1, templateId: 2, date: getDateString(3) },  // John - 10:00-14:00
-    // 4 days out
-    { driverId: 3, templateId: 8, date: getDateString(4) },  // Alice - 14:00-21:00
-    { driverId: 2, templateId: 3, date: getDateString(4) },  // Jane - 11:00-16:00
-    // 5 days out
-    { driverId: 1, templateId: 4, date: getDateString(5) },  // John - 14:00-21:00
-    { driverId: 4, templateId: 8, date: getDateString(5) },  // Mike - 14:00-21:00
-  ];
-
-  sampleShifts.forEach(s => {
-    try {
-      insertScheduledShift.run(s.driverId, s.templateId, s.date);
-    } catch (e) {
-      // Ignore duplicate key errors
-    }
-  });
-
-  console.log('Database seeded with default data and sample shifts');
+  // No explicit default drivers needed if valid seed data isn't provided, 
+  // but could add some if 'Drivers' is empty.
 }
 
 // Helper functions for common queries
-export function getMarkets() {
-  return getDb().prepare('SELECT * FROM markets WHERE active = 1 ORDER BY name').all();
+
+export function getMarkets(includeInactive = false) {
+  const query = includeInactive
+    ? 'SELECT * FROM count ORDER BY defaultcity'
+    : 'SELECT * FROM count WHERE status = 1 ORDER BY defaultcity';
+  return getDb().prepare(query).all().map((m: any) => ({
+    id: m.id,
+    name: m.defaultcity, // Map back to 'name' for frontend compatibility where possible
+    market: m.market,
+    active: m.status // Map back to 'active'
+  }));
+}
+
+export function addMarket(name: string, code: string) {
+  // Name = city name, Code = 3 letter code
+  return getDb().prepare('INSERT INTO count (market, defaultcity, status) VALUES (?, ?, 1)').run(code, name);
+}
+
+export function updateMarketStatus(id: number, active: boolean) {
+  return getDb().prepare('UPDATE count SET status = ? WHERE id = ?').run(active ? 1 : 0, id);
 }
 
 export function getDrivers() {
-  return getDb().prepare('SELECT * FROM drivers ORDER BY name').all();
+  const drivers = getDb().prepare('SELECT * FROM Drivers ORDER BY Owner_lname, Owner_fname').all() as any[];
+  // Map to interface expected by app temporarily, or update app to use new fields
+  return drivers.map(d => ({
+    id: d.did,
+    name: d.displayName || `${d.Owner_fname} ${d.Owner_lname}`,
+    email: d.email,
+    phone: d.phone,
+    market: d.market,
+    priority: d.schedule_priority,
+    blocked: d.status === 0 ? 1 : 0 // Backwards compat for now if needed, but better to update app
+  }));
 }
 
 export function getDriverById(id: number) {
-  return getDb().prepare('SELECT * FROM drivers WHERE id = ?').get(id);
+  const d = getDb().prepare('SELECT * FROM Drivers WHERE did = ?').get(id) as any;
+  if (!d) return undefined;
+  return {
+    id: d.did,
+    name: d.displayName || `${d.Owner_fname} ${d.Owner_lname}`,
+    email: d.email,
+    phone: d.phone,
+    market: d.market,
+    priority: d.schedule_priority,
+    blocked: d.status === 0 ? 1 : 0
+  };
 }
 
 export function getDriverByEmail(email: string) {
-  return getDb().prepare('SELECT * FROM drivers WHERE email = ?').get(email);
+  const d = getDb().prepare('SELECT * FROM Drivers WHERE email = ?').get(email) as any;
+  if (!d) return undefined;
+  return {
+    id: d.did,
+    name: d.displayName || `${d.Owner_fname} ${d.Owner_lname}`,
+    email: d.email,
+    phone: d.phone,
+    market: d.market,
+    priority: d.schedule_priority,
+    blocked: d.status === 0 ? 1 : 0
+  };
 }
 
 export function getShiftTemplates(market?: string) {
@@ -239,21 +332,21 @@ export function getShiftTemplates(market?: string) {
 
 export function getScheduledShifts(options: { market?: string; date?: string; driverId?: number }) {
   let query = `
-    SELECT 
-      ss.id,
-      ss.driver_id as driverId,
-      d.name as driverName,
-      ss.template_id as templateId,
-      st.market,
-      ss.date,
-      st.start_time as startTime,
-      st.end_time as endTime,
-      ss.created_at as createdAt
-    FROM scheduled_shifts ss
-    JOIN drivers d ON ss.driver_id = d.id
-    JOIN shift_templates st ON ss.template_id = st.id
-    WHERE 1=1
-  `;
+  SELECT 
+    ss.id,
+    ss.driver_id as driverId,
+    d.displayName as driverName, -- Use displayName
+    ss.template_id as templateId,
+    st.market,
+    ss.date,
+    st.start_time as startTime,
+    st.end_time as endTime,
+    ss.created_at as createdAt
+  FROM scheduled_shifts ss
+  JOIN Drivers d ON ss.driver_id = d.did
+  JOIN shift_templates st ON ss.template_id = st.id
+  WHERE 1=1
+`;
   const params: (string | number)[] = [];
 
   if (options.market) {
@@ -273,27 +366,27 @@ export function getScheduledShifts(options: { market?: string; date?: string; dr
   return getDb().prepare(query).all(...params);
 }
 
-export function getAdminSettings() {
-  return getDb().prepare('SELECT * FROM admin_settings WHERE id = 1').get();
+export function getScheduleSettings() {
+  return getDb().prepare('SELECT * FROM schedule_settings WHERE id = 1').get();
 }
 
-export function updateAdminSettings(settings: {
+export function updateScheduleSettings(settings: {
   baseScheduleDays?: number;
   cancelHoursBefore?: number;
   showAvailableSpots?: boolean;
   slackWebhookUrl?: string;
 }) {
-  const current = getAdminSettings() as Record<string, unknown>;
+  const current = getScheduleSettings() as Record<string, unknown>;
   const db = getDb();
 
   db.prepare(`
-    UPDATE admin_settings SET
-      base_schedule_days = ?,
-      cancel_hours_before = ?,
-      show_available_spots = ?,
-      slack_webhook_url = ?
-    WHERE id = 1
-  `).run(
+  UPDATE schedule_settings SET
+    base_schedule_days = ?,
+    cancel_hours_before = ?,
+    show_available_spots = ?,
+    slack_webhook_url = ?
+  WHERE id = 1
+`).run(
     settings.baseScheduleDays ?? current.base_schedule_days,
     settings.cancelHoursBefore ?? current.cancel_hours_before,
     settings.showAvailableSpots !== undefined ? (settings.showAvailableSpots ? 1 : 0) : current.show_available_spots,
@@ -311,9 +404,9 @@ export function getCapacityForDate(templateId: number, date: string): number {
 
   // Check for day-specific override
   const override = db.prepare(`
-    SELECT capacity FROM capacity_overrides 
-    WHERE template_id = ? AND day_of_week = ?
-  `).get(templateId, dayOfWeek) as { capacity: number } | undefined;
+  SELECT capacity FROM capacity_overrides 
+  WHERE template_id = ? AND day_of_week = ?
+`).get(templateId, dayOfWeek) as { capacity: number } | undefined;
 
   if (override) {
     return override.capacity;
@@ -328,11 +421,11 @@ export function getCapacityForDate(templateId: number, date: string): number {
 export function getCapacityOverrides(templateId: number) {
   const db = getDb();
   return db.prepare(`
-    SELECT day_of_week as dayOfWeek, capacity 
-    FROM capacity_overrides 
-    WHERE template_id = ?
-    ORDER BY day_of_week
-  `).all(templateId);
+  SELECT day_of_week as dayOfWeek, capacity 
+  FROM capacity_overrides 
+  WHERE template_id = ?
+  ORDER BY day_of_week
+`).all(templateId);
 }
 
 // Set capacity override for a specific day
@@ -345,10 +438,10 @@ export function setCapacityOverride(templateId: number, dayOfWeek: number, capac
   } else {
     // Upsert the override
     db.prepare(`
-      INSERT INTO capacity_overrides (template_id, day_of_week, capacity)
-      VALUES (?, ?, ?)
-      ON CONFLICT(template_id, day_of_week) DO UPDATE SET capacity = excluded.capacity
-    `).run(templateId, dayOfWeek, capacity);
+    INSERT INTO capacity_overrides (template_id, day_of_week, capacity)
+    VALUES (?, ?, ?)
+    ON CONFLICT(template_id, day_of_week) DO UPDATE SET capacity = excluded.capacity
+  `).run(templateId, dayOfWeek, capacity);
   }
 }
 

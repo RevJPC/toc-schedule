@@ -86,8 +86,23 @@ export async function PATCH(
             return NextResponse.json({ error: 'No valid fields to update' }, { status: 400 });
         }
 
+        // Map updates to new schema columns
+        const schemaUpdates: string[] = [];
+        updates.map((field, index) => {
+            if (field === 'priority = ?') schemaUpdates.push('schedule_priority = ?');
+            else if (field === 'blocked = ?') {
+                schemaUpdates.push('status = ?');
+                // Flip logic: blocked(true) -> status(0), blocked(false) -> status(1)
+                values[index] = values[index] ? 0 : 1;
+            }
+            else schemaUpdates.push(field);
+        });
+
+        // Also handle explicit market update if passed as "market" (no name change needed)
+
         values.push(driverId);
-        db.prepare(`UPDATE drivers SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+        // Table is Drivers, ID is did
+        db.prepare(`UPDATE Drivers SET ${schemaUpdates.join(', ')} WHERE did = ?`).run(...values);
 
         const updatedDriver = getDriverById(driverId);
         return NextResponse.json({

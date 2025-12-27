@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb, getAdminSettings } from '@/lib/db';
+import { getDb, getScheduleSettings } from '@/lib/db';
 
 // DELETE /api/shifts/[id] - Cancel a shift
 export async function DELETE(
@@ -15,7 +15,7 @@ export async function DELETE(
         }
 
         const db = getDb();
-        const settings = getAdminSettings() as { cancel_hours_before: number };
+        const settings = getScheduleSettings() as { cancel_hours_before: number };
 
         // Get the shift with template info
         const shift = db.prepare(`
@@ -50,8 +50,27 @@ export async function DELETE(
             );
         }
 
+        // Prevent deleting past shifts (history preservation)
+        const shiftEndDateTime = new Date(`${shift.date}T${shift.end_time}`);
+        // Handle midnight wrapping for end date check
+        if (shift.end_time < shift.start_time) {
+            shiftEndDateTime.setDate(shiftEndDateTime.getDate() + 1);
+        }
+
+        if (shiftEndDateTime < now) {
+            return NextResponse.json(
+                { error: 'Cannot delete past shifts.' },
+                { status: 400 }
+            );
+        }
+
         // Delete the shift
-        db.prepare('DELETE FROM scheduled_shifts WHERE id = ?').run(shiftId);
+        const result = db.prepare('DELETE FROM scheduled_shifts WHERE id = ?').run(shiftId);
+
+        if (result.changes === 0) {
+            console.error(`[DELETE] Failed: No rows deleted for ID ${shiftId}`);
+            return NextResponse.json({ error: 'Failed to delete shift (not found during delete execution)' }, { status: 500 });
+        }
 
         return NextResponse.json({
             success: true,

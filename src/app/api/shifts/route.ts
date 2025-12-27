@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDb, getShiftTemplates, getScheduledShifts, getAdminSettings, getDriverById, getCapacityForDate } from '@/lib/db';
+import { getDb, getShiftTemplates, getScheduledShifts, getScheduleSettings, getDriverById, getCapacityForDate } from '@/lib/db';
+
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 // GET /api/shifts - Get available shifts for a market/date
 export async function GET(request: NextRequest) {
@@ -77,7 +80,7 @@ export async function POST(request: NextRequest) {
         }
 
         const db = getDb();
-        const settings = getAdminSettings() as { base_schedule_days: number; cancel_hours_before: number };
+        const settings = getScheduleSettings() as { base_schedule_days: number; cancel_hours_before: number };
         const driver = getDriverById(driverId) as { id: number; priority: number; blocked: number; market: string } | undefined;
 
         if (!driver) {
@@ -125,14 +128,45 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'Shift is full' }, { status: 400 });
         }
 
-        // Check for overlapping shifts (any market)
+        // --- OVERLAP VALIDATION ---
+
+        // 1. Check Previous Day's Wrapping Shifts
+        const prevDateObj = new Date(shiftDate);
+        prevDateObj.setDate(prevDateObj.getDate() - 1);
+        const prevDate = prevDateObj.toISOString().split('T')[0];
+
+        const prevShifts = getScheduledShifts({ driverId, date: prevDate }) as Array<{
+            startTime: string;
+            endTime: string;
+        }>;
+
+        // "toMinutes" helper
+        const toMinutes = (time: string) => {
+            const [h, m] = time.split(':').map(Number);
+            return h * 60 + m;
+        };
+
+        const myStart = toMinutes(template.start_time);
+
+        for (const s of prevShifts) {
+            const sStart = toMinutes(s.startTime);
+            const sEnd = toMinutes(s.endTime);
+
+            // If previous shift wraps (End < Start), it spills into 'Today' until sEnd minutes
+            if (sEnd < sStart) {
+                if (myStart < sEnd) {
+                    return NextResponse.json({ error: 'Overlaps with a shift from yesterday' }, { status: 400 });
+                }
+            }
+        }
+
+        // 2. Check Same Day Overlaps
         const driverShifts = getScheduledShifts({ driverId, date }) as Array<{
             startTime: string;
             endTime: string;
             market: string;
         }>;
 
-        // Check time overlaps with any existing shift
         for (const shift of driverShifts) {
             const hasOverlap = checkTimeOverlap(
                 template.start_time,
@@ -142,6 +176,34 @@ export async function POST(request: NextRequest) {
             );
             if (hasOverlap) {
                 return NextResponse.json({ error: 'Overlaps with existing shift' }, { status: 400 });
+            }
+        }
+
+        // 3. Check Next Day (if I wrap)
+        // (Optional strictness: if *I* wrap into tomorrow, do I overlap with tomorrow's early shifts?
+        // Implementation plan didn't explicitly demand this, but good for completeness. 
+        // For now, let's stick to the Plan: preventing "I claim a shift that overlaps EXISTING", 
+        // assuming typical usage flow (booking in order).
+        // However, if tomorrow has a 01:00 start and I book 22:00-03:00 today...
+        // Let's add it for safety.)
+
+        const myEnd = toMinutes(template.end_time);
+
+        if (myEnd < myStart) { // I wrap
+            const nextDateObj = new Date(shiftDate);
+            nextDateObj.setDate(nextDateObj.getDate() + 1);
+            const nextDate = nextDateObj.toISOString().split('T')[0];
+
+            const nextShifts = getScheduledShifts({ driverId, date: nextDate }) as Array<{
+                startTime: string;
+                endTime: string;
+            }>;
+
+            for (const s of nextShifts) {
+                const sStart = toMinutes(s.startTime);
+                if (sStart < myEnd) {
+                    return NextResponse.json({ error: 'Overlaps with a shift tomorrow' }, { status: 400 });
+                }
             }
         }
 
@@ -180,9 +242,13 @@ function checkTimeOverlap(start1: string, end1: string, start2: string, end2: st
         return h * 60 + m;
     };
     const s1 = toMinutes(start1);
-    const e1 = toMinutes(end1);
+    let e1 = toMinutes(end1);
     const s2 = toMinutes(start2);
-    const e2 = toMinutes(end2);
+    let e2 = toMinutes(end2);
+
+    // Handle Wrapping: if end < start, it implies end is next day (add 24h = 1440m)
+    if (e1 < s1) e1 += 1440;
+    if (e2 < s2) e2 += 1440;
 
     // Overlap if start1 < end2 AND end1 > start2
     return s1 < e2 && e1 > s2;

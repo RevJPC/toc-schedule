@@ -3,47 +3,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Calendar, Clock, X, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
-
-interface Driver {
-    id: number;
-    name: string;
-    email: string;
-    market: string;
-    priority: 1 | 2 | 3 | 4 | 5;
-    blocked: boolean;
-}
-
-interface Market {
-    id: number;
-    name: string;
-}
-
-interface Settings {
-    baseScheduleDays: number;
-    cancelHoursBefore: number;
-    showAvailableSpots: boolean;
-}
-
-interface Shift {
-    id: number;
-    market: string;
-    startTime: string;
-    endTime: string;
-    capacity: number;
-    scheduled: number;
-    available: number;
-    drivers: Array<{ id: number; name: string; shiftId: number }>;
-}
-
-interface ScheduledShift {
-    id: number;
-    driverId: number;
-    driverName: string;
-    market: string;
-    date: string;
-    startTime: string;
-    endTime: string;
-}
+import type { Driver, Market, Settings, Shift, ScheduledShift } from '@/types';
+import { formatTime, checkTimeOverlap, timeToMinutes, generateDates, getWeekDates } from '@/lib/utils';
 
 export default function DriverDashboard() {
     const router = useRouter();
@@ -66,36 +27,6 @@ export default function DriverDashboard() {
         const bonus = { 1: 5, 2: 4, 3: 3, 4: 2, 5: 1 };
         return settings.baseScheduleDays + (bonus[priority as keyof typeof bonus] || 0);
     }, [settings]);
-
-    // Generate dates for scheduling window
-    const generateDates = useCallback((days: number) => {
-        const dates: string[] = [];
-        const today = new Date();
-        for (let i = 0; i < days; i++) {
-            const date = new Date(today);
-            date.setDate(today.getDate() + i);
-            dates.push(date.toISOString().split('T')[0]);
-        }
-        return dates;
-    }, []);
-
-    // Get week dates for weekly view
-    const getWeekDates = useCallback((offset: number, allDates: string[]) => {
-        const result: string[] = [];
-        const today = new Date();
-        const startOfWeek = new Date(today);
-        startOfWeek.setDate(today.getDate() - today.getDay() + (offset * 7));
-
-        for (let i = 0; i < 7; i++) {
-            const date = new Date(startOfWeek);
-            date.setDate(startOfWeek.getDate() + i);
-            const dateStr = date.toISOString().split('T')[0];
-            if (allDates.includes(dateStr)) {
-                result.push(dateStr);
-            }
-        }
-        return result;
-    }, []);
 
     useEffect(() => {
         const driverId = sessionStorage.getItem('driverId');
@@ -192,7 +123,7 @@ export default function DriverDashboard() {
     };
 
     const canClaimShift = (date: string, startTime: string, endTime: string): { allowed: boolean; reason?: string } => {
-        // Check for overlapping shifts on same day (any market)
+        // 1. Check Same Day Overlaps
         const dayShifts = myShifts.filter(s => s.date === date);
         for (const shift of dayShifts) {
             if (checkTimeOverlap(startTime, endTime, shift.startTime, shift.endTime)) {
@@ -200,20 +131,47 @@ export default function DriverDashboard() {
             }
         }
 
+        // 2. Check Previous Day Wrapping
+        const prevDateObj = new Date(date + 'T00:00:00');
+        prevDateObj.setDate(prevDateObj.getDate() - 1);
+        const prevDate = prevDateObj.toISOString().split('T')[0];
+
+        const prevShifts = myShifts.filter(s => s.date === prevDate);
+        const toMinutes = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+        const myStart = toMinutes(startTime);
+
+        for (const s of prevShifts) {
+            const sStart = toMinutes(s.startTime);
+            const sEnd = toMinutes(s.endTime);
+            if (sEnd < sStart) { // Wraps
+                if (myStart < sEnd) {
+                    return { allowed: false, reason: 'Overlaps with yesterday\'s shift' };
+                }
+            }
+        }
+
+        // 3. Check Next Day (if I wrap)
+        const myEnd = toMinutes(endTime);
+        const myStartM = toMinutes(startTime);
+
+        if (myEnd < myStartM) { // I wrap
+            const nextDateObj = new Date(date + 'T00:00:00');
+            nextDateObj.setDate(nextDateObj.getDate() + 1);
+            const nextDate = nextDateObj.toISOString().split('T')[0];
+
+            const nextShifts = myShifts.filter(s => s.date === nextDate);
+            for (const s of nextShifts) {
+                const sStart = toMinutes(s.startTime);
+                if (sStart < myEnd) {
+                    return { allowed: false, reason: 'Overlaps with tomorrow\'s shift' };
+                }
+            }
+        }
+
         return { allowed: true };
     };
 
-    const checkTimeOverlap = (start1: string, end1: string, start2: string, end2: string): boolean => {
-        const toMinutes = (time: string) => {
-            const [h, m] = time.split(':').map(Number);
-            return h * 60 + m;
-        };
-        const s1 = toMinutes(start1);
-        const e1 = toMinutes(end1);
-        const s2 = toMinutes(start2);
-        const e2 = toMinutes(end2);
-        return s1 < e2 && e1 > s2;
-    };
+
 
     const claimShift = async (templateId: number, date: string) => {
         if (!driver) return;
@@ -279,13 +237,7 @@ export default function DriverDashboard() {
         }
     };
 
-    const formatTime = (time: string) => {
-        const [hours, minutes] = time.split(':');
-        const hour = parseInt(hours);
-        const ampm = hour >= 12 ? 'PM' : 'AM';
-        const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
-        return `${displayHour}:${minutes}${ampm}`;
-    };
+
 
     const handleLogout = () => {
         sessionStorage.removeItem('driverId');
@@ -379,41 +331,51 @@ export default function DriverDashboard() {
                         <Calendar size={20} />
                         My Schedule
                     </h2>
-                    {myShifts.length === 0 ? (
-                        <p style={{ color: 'var(--color-gray-500)' }}>No shifts scheduled</p>
-                    ) : (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                            {myShifts.map(shift => (
-                                <div
-                                    key={shift.id}
-                                    style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'space-between',
-                                        padding: '1rem',
-                                        border: '1px solid var(--color-gray-200)',
-                                        borderRadius: '0.5rem'
-                                    }}
-                                >
-                                    <div>
-                                        <p style={{ fontWeight: '500' }}>{shift.market}</p>
-                                        <p style={{ fontSize: '0.875rem', color: 'var(--color-gray-600)' }}>
-                                            {new Date(shift.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                                            {' • '}
-                                            {formatTime(shift.startTime)} - {formatTime(shift.endTime)}
-                                        </p>
-                                    </div>
-                                    <button
-                                        className="btn btn-danger"
-                                        onClick={() => cancelShift(shift.id)}
-                                        style={{ padding: '0.5rem' }}
+                    {(() => {
+                        const today = new Date();
+                        const yesterday = new Date(today);
+                        yesterday.setDate(yesterday.getDate() - 1);
+                        const yesterdayStr = yesterday.toISOString().split('T')[0];
+                        const visibleShifts = myShifts.filter(s => s.date >= yesterdayStr);
+
+                        if (visibleShifts.length === 0) {
+                            return <p style={{ color: 'var(--color-gray-500)' }}>No upcoming shifts scheduled</p>;
+                        }
+
+                        return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                                {visibleShifts.map(shift => (
+                                    <div
+                                        key={shift.id}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'space-between',
+                                            padding: '1rem',
+                                            border: '1px solid var(--color-gray-200)',
+                                            borderRadius: '0.5rem'
+                                        }}
                                     >
-                                        <X size={18} />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                    )}
+                                        <div>
+                                            <p style={{ fontWeight: '500' }}>{shift.market}</p>
+                                            <p style={{ fontSize: '0.875rem', color: 'var(--color-gray-600)' }}>
+                                                {new Date(shift.date + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+                                                {' • '}
+                                                {formatTime(shift.startTime)} - {formatTime(shift.endTime)}
+                                            </p>
+                                        </div>
+                                        <button
+                                            className="btn btn-danger"
+                                            onClick={() => cancelShift(shift.id)}
+                                            style={{ padding: '0.5rem' }}
+                                        >
+                                            <X size={18} />
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        );
+                    })()}
                 </div>
 
                 {/* Available Shifts */}

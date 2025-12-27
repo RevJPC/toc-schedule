@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getScheduledShifts, getAdminSettings, getShiftTemplates, getMarkets } from '@/lib/db';
+import { getScheduledShifts, getScheduleSettings, getShiftTemplates, getMarkets } from '@/lib/db';
 
 interface SlackBlock {
     type: string;
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Get the webhook URL from settings
-        const settings = getAdminSettings() as { slack_webhook_url?: string } | undefined;
+        const settings = getScheduleSettings() as { slack_webhook_url?: string } | undefined;
         const webhookUrl = settings?.slack_webhook_url;
 
         if (!webhookUrl) {

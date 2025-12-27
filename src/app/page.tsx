@@ -2,14 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-
-interface Driver {
-  id: number;
-  name: string;
-  email: string;
-  market: string;
-  priority: number;
-}
+import type { Driver } from '@/types';
 
 export default function HomePage() {
   const router = useRouter();
