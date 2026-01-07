@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
         const { searchParams } = new URL(request.url);
         const market = searchParams.get('market');
 
-        const templates = getShiftTemplates(market || undefined) as Array<{
+        const templates = await getShiftTemplates(market || undefined) as Array<{
             id: number;
             market: string;
             start_time: string;
@@ -59,15 +59,15 @@ export async function POST(request: NextRequest) {
         const db = getDb();
 
         try {
-            const result = db.prepare(`
-        INSERT INTO shift_templates (market, start_time, end_time, capacity)
-        VALUES (?, ?, ?, ?)
-      `).run(market, startTime, endTime, cap);
+            const [result] = await db.execute(`
+                INSERT INTO \`shift_templates\` (market, start_time, end_time, capacity)
+                VALUES (?, ?, ?, ?)
+            `, [market, startTime, endTime, cap]) as any;
 
             return NextResponse.json({
                 success: true,
                 template: {
-                    id: result.lastInsertRowid,
+                    id: result.insertId,
                     market,
                     startTime,
                     endTime,
@@ -75,7 +75,7 @@ export async function POST(request: NextRequest) {
                 }
             });
         } catch (error) {
-            if ((error as { code?: string }).code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            if ((error as any).code === 'ER_DUP_ENTRY') {
                 return NextResponse.json({ error: 'Template already exists for this market and time' }, { status: 400 });
             }
             throw error;
@@ -99,25 +99,23 @@ export async function DELETE(request: NextRequest) {
         const templateId = parseInt(id);
 
         // Check for dependencies (scheduled shifts)
-        // We could CASCADE, but safer to block if shifts exist, or just delete future shifts?
-        // Let's block if there are future shifts to be safe.
-        const activeShifts = db.prepare("SELECT COUNT(*) as count FROM scheduled_shifts WHERE template_id = ? AND date >= date('now')").get(templateId) as { count: number };
+        const [activeShiftsRows] = await db.execute(
+            "SELECT COUNT(*) as count FROM \`scheduled_shifts\` WHERE template_id = ? AND date >= CURDATE()",
+            [templateId]
+        );
+        const activeShifts = (activeShiftsRows as any[])[0];
 
         if (activeShifts.count > 0) {
             return NextResponse.json({ error: 'Cannot delete template with active future shifts.' }, { status: 409 });
         }
 
-        // It's effectively safe to delete historical shifts mapping if we want, or we can leave them orphaned (but then history breaks).
-        // Actually, if we delete the template, `scheduled_shifts` foreign key `template_id` might restrict us or cascade.
-        // Let's check schema. Assuming we can delete if no active shifts.
-
         // Delete associated overrides first (if any)
-        db.prepare('DELETE FROM capacity_overrides WHERE template_id = ?').run(templateId);
+        await db.execute('DELETE FROM \`capacity_overrides\` WHERE template_id = ?', [templateId]);
 
         // Delete the template
-        const result = db.prepare('DELETE FROM shift_templates WHERE id = ?').run(templateId);
+        const [result] = await db.execute('DELETE FROM \`shift_templates\` WHERE id = ?', [templateId]) as any;
 
-        if (result.changes === 0) {
+        if (result.affectedRows === 0) {
             return NextResponse.json({ error: 'Template not found' }, { status: 404 });
         }
 
@@ -127,7 +125,7 @@ export async function DELETE(request: NextRequest) {
         const logPath = process.cwd() + '/template_debug.log';
         fs.appendFileSync(logPath, `[ERROR] ${JSON.stringify(error, Object.getOwnPropertyNames(error))}\n`);
 
-        if ((error as { code?: string }).code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+        if ((error as any).code === 'ER_ROW_IS_REFERENCED_2') {
             return NextResponse.json({ error: 'Cannot delete: Template is in use by past shifts.' }, { status: 409 });
         }
         console.error('Error deleting template:', error);

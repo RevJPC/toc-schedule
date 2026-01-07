@@ -4,7 +4,7 @@ import { getDb, getDrivers } from '@/lib/db';
 // GET /api/drivers - List all drivers
 export async function GET() {
     try {
-        const drivers = getDrivers();
+        const drivers = await getDrivers();
         return NextResponse.json({ drivers });
     } catch (error) {
         console.error('Error fetching drivers:', error);
@@ -48,26 +48,26 @@ export async function POST(request: NextRequest) {
         const db = getDb();
 
         try {
-            const result = db.prepare(`
-        INSERT INTO Drivers (Owner_fname, Owner_lname, displayName, email, phone, market, schedule_priority, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-      `).run(firstName, lastName, displayName, email, cleanPhone, market, priority || 5);
+            const [result] = await db.execute(`
+                INSERT INTO \`Drivers\` (Owner_fname, Owner_lname, displayName, email, phone, market, schedule_priority, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            `, [firstName, lastName, displayName, email, cleanPhone, market, priority || 5]) as any;
 
             return NextResponse.json({
                 success: true,
                 driver: {
-                    id: result.lastInsertRowid,
+                    id: result.insertId,
                     name: displayName,
                     email,
                     phone: cleanPhone,
                     market,
                     priority: priority || 5,
-                    blocked: false // Legacy compat
+                    blocked: false
                 }
             });
         } catch (error) {
-            // ... existing error handling ...
-            if ((error as { code?: string }).code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            // MySQL duplicate key error
+            if ((error as any).code === 'ER_DUP_ENTRY') {
                 return NextResponse.json({ error: 'Email already exists' }, { status: 400 });
             }
             throw error;

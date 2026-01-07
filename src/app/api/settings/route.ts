@@ -4,7 +4,7 @@ import { getScheduleSettings, updateScheduleSettings } from '@/lib/db';
 // GET /api/settings - Get settings
 export async function GET() {
     try {
-        const settings = getScheduleSettings() as {
+        const settings = await getScheduleSettings() as {
             id: number;
             base_schedule_days: number;
             cancel_hours_before: number;
@@ -42,14 +42,14 @@ export async function PATCH(request: NextRequest) {
             return NextResponse.json({ error: 'cancelHoursBefore must be 1-72' }, { status: 400 });
         }
 
-        updateScheduleSettings({
+        await updateScheduleSettings({
             baseScheduleDays,
             cancelHoursBefore,
             showAvailableSpots,
             slackWebhookUrl
         });
 
-        const settings = getScheduleSettings() as {
+        const settings = await getScheduleSettings() as {
             base_schedule_days: number;
             cancel_hours_before: number;
             show_available_spots: number;

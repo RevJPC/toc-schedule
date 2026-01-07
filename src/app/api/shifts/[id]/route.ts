@@ -15,18 +15,20 @@ export async function DELETE(
         }
 
         const db = getDb();
-        const settings = getScheduleSettings() as { cancel_hours_before: number };
+        const settings = await getScheduleSettings() as { cancel_hours_before: number };
 
         // Get the shift with template info
-        const shift = db.prepare(`
-      SELECT ss.*, st.start_time, st.end_time, st.market
-      FROM scheduled_shifts ss
-      JOIN shift_templates st ON ss.template_id = st.id
-      WHERE ss.id = ?
-    `).get(shiftId) as {
+        const [shiftRows] = await db.execute(`
+            SELECT ss.*, st.start_time, st.end_time, st.market
+            FROM \`scheduled_shifts\` ss
+            JOIN \`shift_templates\` st ON ss.template_id = st.id
+            WHERE ss.id = ?
+        `, [shiftId]);
+
+        const shift = (shiftRows as any[])[0] as {
             id: number;
             driver_id: number;
-            date: string;
+            date: Date | string;
             start_time: string;
             end_time: string;
         } | undefined;
@@ -35,8 +37,13 @@ export async function DELETE(
             return NextResponse.json({ error: 'Shift not found' }, { status: 404 });
         }
 
+        // Convert MySQL Date object to YYYY-MM-DD string if needed
+        const dateStr = shift.date instanceof Date
+            ? shift.date.toISOString().split('T')[0]
+            : shift.date;
+
         // Check if within cancellation window
-        const shiftDateTime = new Date(`${shift.date}T${shift.start_time}`);
+        const shiftDateTime = new Date(`${dateStr}T${shift.start_time}`);
         const now = new Date();
         const hoursUntilShift = (shiftDateTime.getTime() - now.getTime()) / (1000 * 60 * 60);
 
@@ -51,7 +58,7 @@ export async function DELETE(
         }
 
         // Prevent deleting past shifts (history preservation)
-        const shiftEndDateTime = new Date(`${shift.date}T${shift.end_time}`);
+        const shiftEndDateTime = new Date(`${dateStr}T${shift.end_time}`);
         // Handle midnight wrapping for end date check
         if (shift.end_time < shift.start_time) {
             shiftEndDateTime.setDate(shiftEndDateTime.getDate() + 1);
@@ -65,9 +72,9 @@ export async function DELETE(
         }
 
         // Delete the shift
-        const result = db.prepare('DELETE FROM scheduled_shifts WHERE id = ?').run(shiftId);
+        const [result] = await db.execute('DELETE FROM \`scheduled_shifts\` WHERE id = ?', [shiftId]) as any;
 
-        if (result.changes === 0) {
+        if (result.affectedRows === 0) {
             console.error(`[DELETE] Failed: No rows deleted for ID ${shiftId}`);
             return NextResponse.json({ error: 'Failed to delete shift (not found during delete execution)' }, { status: 500 });
         }

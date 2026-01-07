@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
         const date = searchParams.get('date') || undefined;
         const driverId = searchParams.get('driverId');
 
-        const shifts = getScheduledShifts({
+        const shifts = await getScheduledShifts({
             market,
             date,
             driverId: driverId ? parseInt(driverId) : undefined

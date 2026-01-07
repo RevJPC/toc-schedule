@@ -14,7 +14,7 @@ export async function GET(
             return NextResponse.json({ error: 'Invalid driver ID' }, { status: 400 });
         }
 
-        const driver = getDriverById(driverId);
+        const driver = await getDriverById(driverId);
 
         if (!driver) {
             return NextResponse.json({ error: 'Driver not found' }, { status: 404 });
@@ -44,7 +44,7 @@ export async function PATCH(
         const { priority, blocked, market, name, phone } = body;
 
         const db = getDb();
-        const driver = getDriverById(driverId);
+        const driver = await getDriverById(driverId);
 
         if (!driver) {
             return NextResponse.json({ error: 'Driver not found' }, { status: 404 });
@@ -102,9 +102,9 @@ export async function PATCH(
 
         values.push(driverId);
         // Table is Drivers, ID is did
-        db.prepare(`UPDATE Drivers SET ${schemaUpdates.join(', ')} WHERE did = ?`).run(...values);
+        await db.execute(`UPDATE \`Drivers\` SET ${schemaUpdates.join(', ')} WHERE did = ?`, values);
 
-        const updatedDriver = getDriverById(driverId);
+        const updatedDriver = await getDriverById(driverId);
         return NextResponse.json({
             success: true,
             driver: updatedDriver

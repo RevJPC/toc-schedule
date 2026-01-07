@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
         const { searchParams } = new URL(request.url);
         const includeInactive = searchParams.get('includeInactive') === 'true';
 
-        const markets = getMarkets(includeInactive);
+        const markets = await getMarkets(includeInactive);
         return NextResponse.json({ markets });
     } catch (error) {
         console.error('Error fetching markets:', error);
@@ -31,10 +31,10 @@ export async function POST(request: NextRequest) {
         const marketCode = code || name.substring(0, 3).toLowerCase();
 
         try {
-            addMarket(name.trim(), marketCode);
+            await addMarket(name.trim(), marketCode);
             return NextResponse.json({ success: true, message: 'Market created' });
         } catch (e: any) {
-            if (e.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+            if (e.code === 'ER_DUP_ENTRY') {
                 return NextResponse.json({ error: 'Market already exists' }, { status: 409 });
             }
             throw e;
