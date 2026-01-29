@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMarkets, addMarket } from '@/lib/db';
 
+interface MySQLError extends Error {
+    code?: string;
+}
+
 // GET /api/markets - List all markets (includeActive query param to filter?)
 // For admin we want all, for user maybe just active?
 // getMarkets() defaults to active only. getMarkets(true) gives all.
@@ -33,8 +37,8 @@ export async function POST(request: NextRequest) {
         try {
             await addMarket(name.trim(), marketCode);
             return NextResponse.json({ success: true, message: 'Market created' });
-        } catch (e: any) {
-            if (e.code === 'ER_DUP_ENTRY') {
+        } catch (e) {
+            if ((e as MySQLError).code === 'ER_DUP_ENTRY') {
                 return NextResponse.json({ error: 'Market already exists' }, { status: 409 });
             }
             throw e;

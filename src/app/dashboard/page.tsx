@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { Calendar, Clock, X, ChevronLeft, ChevronRight, LogOut } from 'lucide-react';
 import type { Driver, Market, Settings, Shift, ScheduledShift } from '@/types';
-import { formatTime, checkTimeOverlap, timeToMinutes, generateDates, getWeekDates } from '@/lib/utils';
+import { formatTime, checkTimeOverlap, generateDates, getWeekDates } from '@/lib/utils';
 
 export default function DriverDashboard() {
     const router = useRouter();
@@ -28,17 +28,12 @@ export default function DriverDashboard() {
         return settings.baseScheduleDays + (bonus[priority as keyof typeof bonus] || 0);
     }, [settings]);
 
-    useEffect(() => {
-        const driverId = sessionStorage.getItem('driverId');
-        if (!driverId) {
-            router.push('/');
-            return;
-        }
+    const showNotification = useCallback((message: string, type: 'success' | 'error') => {
+        setNotification({ message, type });
+        setTimeout(() => setNotification(null), 3000);
+    }, []);
 
-        fetchInitialData(parseInt(driverId));
-    }, [router]);
-
-    const fetchInitialData = async (driverId: number) => {
+    const fetchInitialData = useCallback(async (driverId: number) => {
         try {
             const [driverRes, marketsRes, settingsRes] = await Promise.all([
                 fetch(`/api/drivers/${driverId}`),
@@ -70,7 +65,17 @@ export default function DriverDashboard() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [router, showNotification]);
+
+    useEffect(() => {
+        const driverId = sessionStorage.getItem('driverId');
+        if (!driverId) {
+            router.push('/');
+            return;
+        }
+
+        fetchInitialData(parseInt(driverId));
+    }, [router, fetchInitialData]);
 
     // Fetch available shifts when market or dates change
     useEffect(() => {
@@ -78,7 +83,7 @@ export default function DriverDashboard() {
 
         const dates = generateDates(getSchedulingWindow(driver.priority));
         fetchAvailableShifts(selectedMarket, dates);
-    }, [driver, selectedMarket, settings, generateDates, getSchedulingWindow]);
+    }, [driver, selectedMarket, settings, getSchedulingWindow]);
 
     const fetchAvailableShifts = async (market: string, dates: string[]) => {
         try {
@@ -115,11 +120,6 @@ export default function DriverDashboard() {
         setSelectedMarket(pendingMarket);
         setShowMarketConfirm(false);
         showNotification(`Switched to ${pendingMarket}`, 'success');
-    };
-
-    const showNotification = (message: string, type: 'success' | 'error') => {
-        setNotification({ message, type });
-        setTimeout(() => setNotification(null), 3000);
     };
 
     const canClaimShift = (date: string, startTime: string, endTime: string): { allowed: boolean; reason?: string } => {

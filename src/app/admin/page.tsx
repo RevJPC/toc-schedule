@@ -56,12 +56,12 @@ export default function AdminDashboard() {
         setWeekStart(new Date().toISOString().split('T')[0]);
     };
 
-    const showNotification = (message: string, type: 'success' | 'error') => {
+    const showNotification = useCallback((message: string, _type: 'success' | 'error') => {
         // Simple alert for now, or could implement a toast
         alert(message);
-    };
+    }, []);
 
-    const fetchInitialData = async () => {
+    const fetchInitialData = useCallback(async () => {
         try {
             const [marketsRes, driversRes, templatesRes, settingsRes] = await Promise.all([
                 fetch('/api/markets?includeInactive=true', { cache: 'no-store' }),
@@ -75,7 +75,7 @@ export default function AdminDashboard() {
             const templatesData = await templatesRes.json();
             const settingsData = await settingsRes.json();
 
-            const mappedMarkets = (marketsData.markets || []).map((m: any) => ({
+            const mappedMarkets = (marketsData.markets || []).map((m: { id: number; name: string; market: string; active: boolean }) => ({
                 id: m.id,
                 name: m.name,
                 market: m.market,
@@ -99,7 +99,7 @@ export default function AdminDashboard() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [showNotification]);
 
     const fetchScheduleData = useCallback(async () => {
         const weekDates = getWeekDates(weekStart);
@@ -123,7 +123,7 @@ export default function AdminDashboard() {
 
     useEffect(() => {
         fetchInitialData();
-    }, []);
+    }, [fetchInitialData]);
 
     useEffect(() => {
         if (markets.length > 0) {
@@ -151,7 +151,7 @@ export default function AdminDashboard() {
             } else {
                 showNotification('Failed to create template', 'error');
             }
-        } catch (e) {
+        } catch {
             showNotification('Error creating template', 'error');
         }
     };
@@ -173,7 +173,7 @@ export default function AdminDashboard() {
 
     const [showCapacityModal, setShowCapacityModal] = useState(false);
     const [editingCapacityTemplateId, setEditingCapacityTemplateId] = useState<number | null>(null);
-    const [capacityOverrides, setCapacityOverrides] = useState<any[]>([]);
+    const [capacityOverrides, setCapacityOverrides] = useState<Array<{ dayOfWeek: number; dayName: string; capacity: number; isOverride: boolean }>>([]);
     const [capacityDefault, setCapacityDefault] = useState(0);
 
     const openCapacityEditor = async (id: number) => {
@@ -259,7 +259,7 @@ export default function AdminDashboard() {
                 fetchInitialData();
                 showNotification('Market added', 'success');
             }
-        } catch (e) {
+        } catch {
             showNotification('Failed to add market', 'error');
         }
     };
@@ -272,7 +272,7 @@ export default function AdminDashboard() {
                 body: JSON.stringify({ active })
             });
             fetchInitialData();
-        } catch (e) {
+        } catch {
             showNotification('Failed to update market', 'error');
         }
     };
@@ -288,7 +288,7 @@ export default function AdminDashboard() {
                 const data = await res.json();
                 showNotification(data.error || 'Failed to delete market', 'error');
             }
-        } catch (e) {
+        } catch {
             showNotification('Error deleting market', 'error');
         }
     };
@@ -835,7 +835,7 @@ export default function AdminDashboard() {
                                         } else {
                                             showNotification('Today\'s schedule posted to Slack!', 'success');
                                         }
-                                    } catch (error) {
+                                    } catch {
                                         showNotification('Failed to post to Slack', 'error');
                                     } finally {
                                         setSlackPosting(false);

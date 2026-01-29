@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 
+interface ShiftTemplate {
+    id: number;
+    market: string;
+    start_time: string;
+    end_time: string;
+    capacity: number;
+}
+
 // PATCH /api/templates/[id] - Update a shift template
 export async function PATCH(
     request: NextRequest,
@@ -18,7 +26,13 @@ export async function PATCH(
         const { capacity, startTime, endTime } = body;
 
         const db = getDb();
-        const template = db.prepare('SELECT * FROM shift_templates WHERE id = ?').get(templateId);
+        
+        // Check if template exists
+        const [templateRows] = await db.execute(
+            'SELECT * FROM shift_templates WHERE id = ?',
+            [templateId]
+        );
+        const template = (templateRows as ShiftTemplate[])[0];
 
         if (!template) {
             return NextResponse.json({ error: 'Template not found' }, { status: 404 });
@@ -34,10 +48,12 @@ export async function PATCH(
             }
 
             // Check if reducing capacity below current scheduled count
-            const currentScheduled = db.prepare(`
-        SELECT COUNT(*) as count FROM scheduled_shifts 
-        WHERE template_id = ? AND date >= date('now')
-      `).get(templateId) as { count: number };
+            const [countRows] = await db.execute(
+                `SELECT COUNT(*) as count FROM scheduled_shifts 
+                 WHERE template_id = ? AND date >= CURDATE()`,
+                [templateId]
+            );
+            const currentScheduled = (countRows as { count: number }[])[0];
 
             if (capacity < currentScheduled.count) {
                 return NextResponse.json(
@@ -73,15 +89,17 @@ export async function PATCH(
         }
 
         values.push(templateId);
-        db.prepare(`UPDATE shift_templates SET ${updates.join(', ')} WHERE id = ?`).run(...values);
+        await db.execute(
+            `UPDATE shift_templates SET ${updates.join(', ')} WHERE id = ?`,
+            values
+        );
 
-        const updated = db.prepare('SELECT * FROM shift_templates WHERE id = ?').get(templateId) as {
-            id: number;
-            market: string;
-            start_time: string;
-            end_time: string;
-            capacity: number;
-        };
+        // Fetch updated template
+        const [updatedRows] = await db.execute(
+            'SELECT * FROM shift_templates WHERE id = ?',
+            [templateId]
+        );
+        const updated = (updatedRows as ShiftTemplate[])[0];
 
         return NextResponse.json({
             success: true,
@@ -115,10 +133,12 @@ export async function DELETE(
         const db = getDb();
 
         // Check if any future shifts are scheduled
-        const scheduled = db.prepare(`
-      SELECT COUNT(*) as count FROM scheduled_shifts 
-      WHERE template_id = ? AND date >= date('now')
-    `).get(templateId) as { count: number };
+        const [countRows] = await db.execute(
+            `SELECT COUNT(*) as count FROM scheduled_shifts 
+             WHERE template_id = ? AND date >= CURDATE()`,
+            [templateId]
+        );
+        const scheduled = (countRows as { count: number }[])[0];
 
         if (scheduled.count > 0) {
             return NextResponse.json(
@@ -127,7 +147,7 @@ export async function DELETE(
             );
         }
 
-        db.prepare('DELETE FROM shift_templates WHERE id = ?').run(templateId);
+        await db.execute('DELETE FROM shift_templates WHERE id = ?', [templateId]);
 
         return NextResponse.json({
             success: true,
