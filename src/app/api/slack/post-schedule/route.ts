@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getScheduledShifts, getScheduleSettings, getShiftTemplates, getMarkets } from '@/lib/db';
+import { getScheduledShifts, getScheduleSettings, getMarkets } from '@/lib/db';
 
 interface SlackBlock {
     type: string;
@@ -20,7 +20,7 @@ export async function POST(request: NextRequest) {
         }
 
         // Get the webhook URL from settings
-        const settings = getScheduleSettings() as { slack_webhook_url?: string } | undefined;
+        const settings = await getScheduleSettings() as { slack_webhook_url?: string } | undefined;
         const webhookUrl = settings?.slack_webhook_url;
 
         if (!webhookUrl) {
@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
         // Get markets to post (all if not specified)
         const markets = market
             ? [{ name: market }]
-            : (getMarkets() as Array<{ name: string }>);
+            : (await getMarkets() as Array<{ name: string }>);
 
         // Build Slack message blocks
         const blocks: SlackBlock[] = [
@@ -59,11 +59,7 @@ export async function POST(request: NextRequest) {
         let hasAnyScheduled = false;
 
         for (const m of markets) {
-            const scheduled = getScheduledShifts({ market: m.name, date: today }) as Array<{
-                driverName: string;
-                startTime: string;
-                endTime: string;
-            }>;
+            const scheduled = await getScheduledShifts({ market: m.name, date: today });
 
             if (scheduled.length === 0) continue;
             hasAnyScheduled = true;

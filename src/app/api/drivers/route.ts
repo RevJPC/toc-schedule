@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, getDrivers } from '@/lib/db';
+import type { ResultSetHeader } from 'mysql2';
+
+interface MySQLError extends Error {
+    code?: string;
+}
 
 // GET /api/drivers - List all drivers
 export async function GET() {
@@ -17,7 +22,8 @@ export async function POST(request: NextRequest) {
     try {
         const body = await request.json();
         // Allow flexible input: 'name' (full string) or 'firstName'/'lastName'
-        let { name, firstName, lastName, email, phone, market, priority } = body;
+        const { name, email, phone, market, priority } = body;
+        let { firstName, lastName } = body;
 
         if ((!name && (!firstName || !lastName)) || !email || !market) {
             return NextResponse.json(
@@ -51,12 +57,14 @@ export async function POST(request: NextRequest) {
             const [result] = await db.execute(`
                 INSERT INTO \`Drivers\` (Owner_fname, Owner_lname, displayName, email, phone, market, schedule_priority, status)
                 VALUES (?, ?, ?, ?, ?, ?, ?, 1)
-            `, [firstName, lastName, displayName, email, cleanPhone, market, priority || 5]) as any;
+            `, [firstName, lastName, displayName, email, cleanPhone, market, priority || 5]);
+
+            const insertResult = result as ResultSetHeader;
 
             return NextResponse.json({
                 success: true,
                 driver: {
-                    id: result.insertId,
+                    id: insertResult.insertId,
                     name: displayName,
                     email,
                     phone: cleanPhone,
@@ -67,7 +75,7 @@ export async function POST(request: NextRequest) {
             });
         } catch (error) {
             // MySQL duplicate key error
-            if ((error as any).code === 'ER_DUP_ENTRY') {
+            if ((error as MySQLError).code === 'ER_DUP_ENTRY') {
                 return NextResponse.json({ error: 'Email already exists' }, { status: 400 });
             }
             throw error;

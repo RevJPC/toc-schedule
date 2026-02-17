@@ -14,11 +14,15 @@ export async function GET(request: NextRequest) {
             );
         }
 
-        const overrides = getCapacityOverrides(parseInt(templateId));
+        const overrides = await getCapacityOverrides(parseInt(templateId));
 
         // Build a full week object with defaults for easier UI consumption
         const db = getDb();
-        const template = db.prepare('SELECT capacity FROM shift_templates WHERE id = ?').get(parseInt(templateId)) as { capacity: number } | undefined;
+        const [rows] = await db.execute(
+            'SELECT capacity FROM shift_templates WHERE id = ?',
+            [parseInt(templateId)]
+        );
+        const template = (rows as { capacity: number }[])[0];
         const defaultCapacity = template?.capacity ?? 0;
 
         const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -63,7 +67,7 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'capacity must be 0-20 (0 uses default)' }, { status: 400 });
         }
 
-        setCapacityOverride(templateId, dayOfWeek, capacity);
+        await setCapacityOverride(templateId, dayOfWeek, capacity);
 
         return NextResponse.json({
             success: true,
@@ -88,7 +92,7 @@ export async function DELETE(request: NextRequest) {
             );
         }
 
-        deleteCapacityOverrides(parseInt(templateId));
+        await deleteCapacityOverrides(parseInt(templateId));
 
         return NextResponse.json({
             success: true,

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Ignore legacy scripts folder (contains SQLite migration scripts)
+    "scripts/**",
   ]),
 ]);
 

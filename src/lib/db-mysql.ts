@@ -1,29 +1,167 @@
-import mysql from 'mysql2/promise';
+import mysql, { PoolOptions } from 'mysql2/promise';
+import fs from 'fs';
 
 // Singleton connection pool
 let pool: mysql.Pool | null = null;
 
+// Validate required environment variables
+function validateEnvironment(): void {
+  const requiredVars = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME'];
+  const missingVars = requiredVars.filter(varName => !process.env[varName]);
+  
+  if (missingVars.length > 0 && process.env.NODE_ENV === 'production') {
+    throw new Error(
+      `Missing required environment variables: ${missingVars.join(', ')}. ` +
+      'Please set these in your environment or .env file.'
+    );
+  }
+}
+
+// Build SSL configuration for AWS RDS or other secure connections
+function getSSLConfig(): PoolOptions['ssl'] | undefined {
+  const sslEnabled = process.env.DB_SSL === 'true';
+  
+  if (!sslEnabled) {
+    return undefined;
+  }
+  
+  // If a custom CA certificate is provided, use it
+  if (process.env.DB_SSL_CA) {
+    return {
+      ca: fs.readFileSync(process.env.DB_SSL_CA),
+      rejectUnauthorized: true
+    };
+  }
+  
+  // For AWS RDS, use the default SSL configuration
+  // mysql2 will use the system's CA certificates
+  return {
+    rejectUnauthorized: true
+  };
+}
+
+// Create connection pool with retry logic
+async function createPoolWithRetry(maxRetries = 3, retryDelay = 2000): Promise<mysql.Pool> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const poolConfig: PoolOptions = {
+        host: process.env.DB_HOST || 'localhost',
+        port: parseInt(process.env.DB_PORT || '3306'),
+        user: process.env.DB_USER || 'root',
+        password: process.env.DB_PASSWORD || '',
+        database: process.env.DB_NAME || 'toc_schedule',
+        waitForConnections: true,
+        connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT || '10'),
+        queueLimit: 100, // Limit queue to prevent memory issues under high load
+        enableKeepAlive: true,
+        keepAliveInitialDelay: 10000, // 10 seconds
+        connectTimeout: 10000, // 10 second connection timeout
+        ssl: getSSLConfig()
+      };
+
+      const newPool = mysql.createPool(poolConfig);
+      
+      // Test the connection
+      const connection = await newPool.getConnection();
+      connection.release();
+      
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[DB] MySQL connection pool created successfully');
+      }
+      
+      return newPool;
+    } catch (error) {
+      lastError = error as Error;
+      
+      if (process.env.NODE_ENV !== 'production') {
+        console.error(`[DB] Connection attempt ${attempt}/${maxRetries} failed:`, error);
+      }
+      
+      if (attempt < maxRetries) {
+        // Wait before retrying with exponential backoff
+        const delay = retryDelay * Math.pow(2, attempt - 1);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  throw new Error(
+    `Failed to connect to database after ${maxRetries} attempts. ` +
+    `Last error: ${lastError?.message}`
+  );
+}
+
 export function getDb(): mysql.Pool {
   if (!pool) {
-    console.log('[DB] Initializing MySQL connection pool...');
-
-    pool = mysql.createPool({
+    // Validate environment in production
+    validateEnvironment();
+    
+    // Create pool synchronously for backward compatibility
+    // Note: First query may fail if connection isn't ready
+    const poolConfig: PoolOptions = {
       host: process.env.DB_HOST || 'localhost',
       port: parseInt(process.env.DB_PORT || '3306'),
       user: process.env.DB_USER || 'root',
       password: process.env.DB_PASSWORD || '',
       database: process.env.DB_NAME || 'toc_schedule',
       waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
+      connectionLimit: parseInt(process.env.DB_CONNECTION_LIMIT || '10'),
+      queueLimit: 100,
       enableKeepAlive: true,
-      keepAliveInitialDelay: 0
-    });
+      keepAliveInitialDelay: 10000,
+      connectTimeout: 10000,
+      ssl: getSSLConfig()
+    };
 
-    console.log('[DB] MySQL connection pool created');
+    pool = mysql.createPool(poolConfig);
+    
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[DB] MySQL connection pool initialized');
+    }
   }
 
   return pool;
+}
+
+// Initialize pool with retry (call this at app startup if needed)
+export async function initializeDb(): Promise<mysql.Pool> {
+  if (!pool) {
+    validateEnvironment();
+    pool = await createPoolWithRetry();
+  }
+  return pool;
+}
+
+// Health check function for monitoring
+export async function checkDbHealth(): Promise<{ healthy: boolean; latencyMs: number; error?: string }> {
+  const start = Date.now();
+  try {
+    const db = getDb();
+    await db.execute('SELECT 1');
+    return {
+      healthy: true,
+      latencyMs: Date.now() - start
+    };
+  } catch (error) {
+    return {
+      healthy: false,
+      latencyMs: Date.now() - start,
+      error: (error as Error).message
+    };
+  }
+}
+
+// Graceful shutdown
+export async function closeDb(): Promise<void> {
+  if (pool) {
+    await pool.end();
+    pool = null;
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[DB] MySQL connection pool closed');
+    }
+  }
 }
 
 // Helper functions for common queries
@@ -35,11 +173,11 @@ export async function getMarkets(includeInactive = false) {
     : 'SELECT * FROM `count` WHERE status = 1 ORDER BY defaultcity';
 
   const [rows] = await db.execute(query);
-  return (rows as any[]).map((m: any) => ({
-    id: m.id,
-    name: m.defaultcity,
-    market: m.market,
-    active: m.status
+  return (rows as Record<string, unknown>[]).map((m) => ({
+    id: m.id as number,
+    name: m.defaultcity as string,
+    market: m.market as string,
+    active: Boolean(m.status)
   }));
 }
 
@@ -67,14 +205,14 @@ export async function getDrivers() {
     'SELECT * FROM `Drivers` ORDER BY Owner_lname, Owner_fname'
   );
 
-  return (rows as any[]).map((d: any) => ({
+  return (rows as Record<string, unknown>[]).map((d) => ({
     id: d.did,
-    name: d.displayName || `${d.Owner_fname} ${d.Owner_lname}`,
+    name: (d.displayName as string) || `${d.Owner_fname} ${d.Owner_lname}`,
     email: d.email,
     phone: d.phone,
     market: d.market,
     priority: d.schedule_priority,
-    blocked: d.status === 0 ? 1 : 0
+    blocked: d.status === 0
   }));
 }
 
@@ -85,17 +223,17 @@ export async function getDriverById(id: number) {
     [id]
   );
 
-  const d = (rows as any[])[0];
+  const d = (rows as Record<string, unknown>[])[0];
   if (!d) return undefined;
 
   return {
     id: d.did,
-    name: d.displayName || `${d.Owner_fname} ${d.Owner_lname}`,
+    name: (d.displayName as string) || `${d.Owner_fname} ${d.Owner_lname}`,
     email: d.email,
     phone: d.phone,
     market: d.market,
     priority: d.schedule_priority,
-    blocked: d.status === 0 ? 1 : 0
+    blocked: d.status === 0
   };
 }
 
@@ -106,17 +244,17 @@ export async function getDriverByEmail(email: string) {
     [email]
   );
 
-  const d = (rows as any[])[0];
+  const d = (rows as Record<string, unknown>[])[0];
   if (!d) return undefined;
 
   return {
     id: d.did,
-    name: d.displayName || `${d.Owner_fname} ${d.Owner_lname}`,
+    name: (d.displayName as string) || `${d.Owner_fname} ${d.Owner_lname}`,
     email: d.email,
     phone: d.phone,
     market: d.market,
     priority: d.schedule_priority,
-    blocked: d.status === 0 ? 1 : 0
+    blocked: d.status === 0
   };
 }
 
@@ -137,7 +275,19 @@ export async function getShiftTemplates(market?: string) {
   return rows;
 }
 
-export async function getScheduledShifts(options: { market?: string; date?: string; driverId?: number }) {
+interface ScheduledShiftRow {
+  id: number;
+  driverId: number;
+  driverName: string;
+  templateId: number;
+  market: string;
+  date: Date | string;
+  startTime: string;
+  endTime: string;
+  createdAt: Date | string;
+}
+
+export async function getScheduledShifts(options: { market?: string; date?: string; driverId?: number }): Promise<Array<Omit<ScheduledShiftRow, 'date'> & { date: string }>> {
   const db = getDb();
 
   let query = `
@@ -177,11 +327,20 @@ export async function getScheduledShifts(options: { market?: string; date?: stri
   const [rows] = await db.execute(query, params);
 
   // Format dates to YYYY-MM-DD strings (MySQL returns Date objects)
-  return (rows as any[]).map((row: any) => ({
-    ...row,
+  return (rows as ScheduledShiftRow[]).map((row) => ({
+    id: row.id,
+    driverId: row.driverId,
+    driverName: row.driverName,
+    templateId: row.templateId,
+    market: row.market,
     date: row.date instanceof Date
       ? row.date.toISOString().split('T')[0]
-      : row.date
+      : row.date as string,
+    startTime: row.startTime,
+    endTime: row.endTime,
+    createdAt: row.createdAt instanceof Date
+      ? row.createdAt.toISOString()
+      : row.createdAt as string
   }));
 }
 
@@ -190,7 +349,7 @@ export async function getScheduleSettings() {
   const [rows] = await db.execute(
     'SELECT * FROM `schedule_settings` WHERE id = 1'
   );
-  return (rows as any[])[0];
+  return (rows as Record<string, unknown>[])[0];
 }
 
 export async function updateScheduleSettings(settings: {
@@ -210,10 +369,10 @@ export async function updateScheduleSettings(settings: {
       slack_webhook_url = ?
     WHERE id = 1
   `, [
-    settings.baseScheduleDays ?? current.base_schedule_days,
-    settings.cancelHoursBefore ?? current.cancel_hours_before,
-    settings.showAvailableSpots !== undefined ? (settings.showAvailableSpots ? 1 : 0) : current.show_available_spots,
-    settings.slackWebhookUrl ?? current.slack_webhook_url
+    settings.baseScheduleDays ?? current?.base_schedule_days,
+    settings.cancelHoursBefore ?? current?.cancel_hours_before,
+    settings.showAvailableSpots !== undefined ? (settings.showAvailableSpots ? 1 : 0) : current?.show_available_spots,
+    settings.slackWebhookUrl ?? current?.slack_webhook_url
   ]);
 }
 
@@ -231,7 +390,7 @@ export async function getCapacityForDate(templateId: number, date: string): Prom
     WHERE template_id = ? AND day_of_week = ?
   `, [templateId, dayOfWeek]);
 
-  const override = (overrideRows as any[])[0];
+  const override = (overrideRows as { capacity: number }[])[0];
   if (override) {
     return override.capacity;
   }
@@ -242,7 +401,7 @@ export async function getCapacityForDate(templateId: number, date: string): Prom
     [templateId]
   );
 
-  const template = (templateRows as any[])[0];
+  const template = (templateRows as { capacity: number }[])[0];
   return template?.capacity ?? 0;
 }
 

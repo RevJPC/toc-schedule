@@ -1,5 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, getScheduleSettings } from '@/lib/db';
+import type { ResultSetHeader } from 'mysql2';
+
+interface ShiftRow {
+    id: number;
+    driver_id: number;
+    date: Date | string;
+    start_time: string;
+    end_time: string;
+}
 
 // DELETE /api/shifts/[id] - Cancel a shift
 export async function DELETE(
@@ -25,13 +34,7 @@ export async function DELETE(
             WHERE ss.id = ?
         `, [shiftId]);
 
-        const shift = (shiftRows as any[])[0] as {
-            id: number;
-            driver_id: number;
-            date: Date | string;
-            start_time: string;
-            end_time: string;
-        } | undefined;
+        const shift = (shiftRows as ShiftRow[])[0];
 
         if (!shift) {
             return NextResponse.json({ error: 'Shift not found' }, { status: 404 });
@@ -72,9 +75,10 @@ export async function DELETE(
         }
 
         // Delete the shift
-        const [result] = await db.execute('DELETE FROM \`scheduled_shifts\` WHERE id = ?', [shiftId]) as any;
+        const [result] = await db.execute('DELETE FROM \`scheduled_shifts\` WHERE id = ?', [shiftId]);
+        const deleteResult = result as ResultSetHeader;
 
-        if (result.affectedRows === 0) {
+        if (deleteResult.affectedRows === 0) {
             console.error(`[DELETE] Failed: No rows deleted for ID ${shiftId}`);
             return NextResponse.json({ error: 'Failed to delete shift (not found during delete execution)' }, { status: 500 });
         }

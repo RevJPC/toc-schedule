@@ -1,8 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb, getShiftTemplates, getScheduledShifts, getScheduleSettings, getDriverById, getCapacityForDate } from '@/lib/db';
+import type { ResultSetHeader } from 'mysql2';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
+
+interface ShiftTemplate {
+    id: number;
+    market: string;
+    start_time: string;
+    end_time: string;
+    capacity: number;
+}
+
+interface CountResult {
+    count: number;
+}
+
+interface MySQLError extends Error {
+    code?: string;
+}
 
 // GET /api/shifts - Get available shifts for a market/date
 export async function GET(request: NextRequest) {
@@ -19,23 +36,10 @@ export async function GET(request: NextRequest) {
         }
 
         // Get shift templates for the market
-        const templates = await getShiftTemplates(market) as Array<{
-            id: number;
-            market: string;
-            start_time: string;
-            end_time: string;
-            capacity: number;
-        }>;
+        const templates = await getShiftTemplates(market) as ShiftTemplate[];
 
         // Get scheduled shifts for that date/market
-        const scheduled = await getScheduledShifts({ market, date }) as Array<{
-            id: number;
-            driverId: number;
-            driverName: string;
-            templateId: number;
-            startTime: string;
-            endTime: string;
-        }>;
+        const scheduled = await getScheduledShifts({ market, date });
 
         // Build availability info for each template
         const shifts = await Promise.all(templates.map(async template => {
@@ -81,7 +85,7 @@ export async function POST(request: NextRequest) {
 
         const db = getDb();
         const settings = await getScheduleSettings() as { base_schedule_days: number; cancel_hours_before: number };
-        const driver = await getDriverById(driverId) as { id: number; priority: number; blocked: number; market: string } | undefined;
+        const driver = await getDriverById(driverId) as { id: number; priority: number; blocked: boolean; market: string } | undefined;
 
         if (!driver) {
             return NextResponse.json({ error: 'Driver not found' }, { status: 404 });
@@ -93,13 +97,7 @@ export async function POST(request: NextRequest) {
 
         // Get the template
         const [templateRows] = await db.execute('SELECT * FROM `shift_templates` WHERE id = ?', [templateId]);
-        const template = (templateRows as any[])[0] as {
-            id: number;
-            market: string;
-            start_time: string;
-            end_time: string;
-            capacity: number;
-        } | undefined;
+        const template = (templateRows as ShiftTemplate[])[0];
 
         if (!template) {
             return NextResponse.json({ error: 'Shift template not found' }, { status: 404 });
@@ -124,7 +122,7 @@ export async function POST(request: NextRequest) {
             SELECT COUNT(*) as count FROM \`scheduled_shifts\` 
             WHERE template_id = ? AND date = ?
         `, [templateId, date]);
-        const currentCount = (countRows as any[])[0];
+        const currentCount = (countRows as CountResult[])[0];
 
         if (currentCount.count >= capacityForDate) {
             return NextResponse.json({ error: 'Shift is full' }, { status: 400 });
@@ -137,10 +135,7 @@ export async function POST(request: NextRequest) {
         prevDateObj.setDate(prevDateObj.getDate() - 1);
         const prevDate = prevDateObj.toISOString().split('T')[0];
 
-        const prevShifts = await getScheduledShifts({ driverId, date: prevDate }) as Array<{
-            startTime: string;
-            endTime: string;
-        }>;
+        const prevShifts = await getScheduledShifts({ driverId, date: prevDate });
 
         // "toMinutes" helper
         const toMinutes = (time: string) => {
@@ -163,11 +158,7 @@ export async function POST(request: NextRequest) {
         }
 
         // 2. Check Same Day Overlaps
-        const driverShifts = await getScheduledShifts({ driverId, date }) as Array<{
-            startTime: string;
-            endTime: string;
-            market: string;
-        }>;
+        const driverShifts = await getScheduledShifts({ driverId, date });
 
         for (const shift of driverShifts) {
             const hasOverlap = checkTimeOverlap(
@@ -196,10 +187,7 @@ export async function POST(request: NextRequest) {
             nextDateObj.setDate(nextDateObj.getDate() + 1);
             const nextDate = nextDateObj.toISOString().split('T')[0];
 
-            const nextShifts = await getScheduledShifts({ driverId, date: nextDate }) as Array<{
-                startTime: string;
-                endTime: string;
-            }>;
+            const nextShifts = await getScheduledShifts({ driverId, date: nextDate });
 
             for (const s of nextShifts) {
                 const sStart = toMinutes(s.startTime);
@@ -213,13 +201,15 @@ export async function POST(request: NextRequest) {
         const [result] = await db.execute(`
             INSERT INTO \`scheduled_shifts\` (driver_id, template_id, date)
             VALUES (?, ?, ?)
-        `, [driverId, templateId, date]) as any;
+        `, [driverId, templateId, date]);
+
+        const insertResult = result as ResultSetHeader;
 
         return NextResponse.json({
             success: true,
             message: 'Shift claimed successfully',
             shift: {
-                id: result.insertId,
+                id: insertResult.insertId,
                 driverId,
                 templateId,
                 date,
@@ -230,7 +220,7 @@ export async function POST(request: NextRequest) {
         });
     } catch (error) {
         console.error('Error claiming shift:', error);
-        if ((error as any).code === 'ER_DUP_ENTRY') {
+        if ((error as MySQLError).code === 'ER_DUP_ENTRY') {
             return NextResponse.json({ error: 'Already scheduled for this shift' }, { status: 400 });
         }
         return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
